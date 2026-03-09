@@ -16,10 +16,12 @@ clean:
 version:
 	@echo $(VERSION)
 
-COMPOSE = docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.selfservice.yml
+COMPOSE = docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.selfservice.yml
+UPGRADE = docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.upgrade.yml
 
 up:
 	$(COMPOSE) up -d --build
+	$(UPGRADE) run --rm upgrade
 
 down:
 	$(COMPOSE) down
