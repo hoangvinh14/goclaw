@@ -20,7 +20,20 @@ type ChannelsConfig struct {
 	Zalo              ZaloConfig               `json:"zalo"`
 	ZaloPersonal      ZaloPersonalConfig       `json:"zalo_personal"`
 	Feishu            FeishuConfig             `json:"feishu"`
+	ChatOps           ChatOpsConfig            `json:"chatops"`
 	PendingCompaction *PendingCompactionConfig `json:"pending_compaction,omitempty"` // global pending message compaction settings
+}
+
+type ChatOpsConfig struct {
+	Enabled        bool                `json:"enabled"`
+	ServerURL      string              `json:"server_url"`                    // Mattermost-compatible server URL
+	Token          string              `json:"token"`                         // MMAUTHTOKEN from browser cookies
+	AllowFrom      FlexibleStringSlice `json:"allow_from"`
+	DMPolicy       string              `json:"dm_policy,omitempty"`           // "pairing" (default), "allowlist", "open", "disabled"
+	GroupPolicy    string              `json:"group_policy,omitempty"`        // "allowlist" (default), "open", "pairing", "disabled"
+	RequireMention *bool               `json:"require_mention,omitempty"`     // require @bot mention in groups (default true)
+	HistoryLimit   int                 `json:"history_limit,omitempty"`       // max pending group messages for context (default 50, 0=disabled)
+	BlockReply     *bool               `json:"block_reply,omitempty"`         // override gateway block_reply (nil = inherit)
 }
 
 type TelegramConfig struct {
