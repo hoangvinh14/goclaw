@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,7 +97,7 @@ func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 
 	return &Channel{
 		BaseChannel:    base,
-		serverURL:      cfg.ServerURL,
+		serverURL:      strings.TrimRight(cfg.ServerURL, "/"),
 		token:          cfg.Token,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		requireMention: requireMention,
