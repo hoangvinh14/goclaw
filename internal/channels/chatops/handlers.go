@@ -42,6 +42,8 @@ func (c *Channel) handlePosted(event map[string]any) {
 	userID, _ := post["user_id"].(string)
 	channelID, _ := post["channel_id"].(string)
 	message, _ := post["message"].(string)
+	postID, _ := post["id"].(string)
+	rootID, _ := post["root_id"].(string)
 
 	// Skip self-sent messages
 	if userID == "" || userID == c.botUserID {
@@ -81,7 +83,18 @@ func (c *Channel) handlePosted(event map[string]any) {
 	}
 
 	content := message
+
+	// Compute thread root for reply: if already in a thread use its root, otherwise reply under this post.
+	replyRootID := rootID
+	if replyRootID == "" {
+		replyRootID = postID
+	}
+
+	// Session isolation: each thread gets its own session key.
 	localKey := channelID
+	if replyRootID != "" {
+		localKey = fmt.Sprintf("%s:thread:%s", channelID, replyRootID)
+	}
 
 	// Mention gating in groups
 	if !isDM && c.requireMention {
@@ -126,6 +139,9 @@ func (c *Channel) handlePosted(event map[string]any) {
 		"channel_id": channelID,
 		"is_dm":      fmt.Sprintf("%t", isDM),
 		"local_key":  localKey,
+	}
+	if replyRootID != "" {
+		metadata["message_thread_id"] = replyRootID
 	}
 
 	c.HandleMessage(compoundSenderID, channelID, finalContent, nil, metadata, peerKind)
@@ -259,7 +275,7 @@ func (c *Channel) sendPairingReply(senderID, channelID string) {
 			senderID, code, code)
 	}
 
-	if err := c.sendPost(channelID, msg, nil); err != nil {
+	if err := c.sendPost(channelID, msg, nil, ""); err != nil {
 		slog.Warn("chatops: failed to send pairing reply",
 			"channel_id", channelID, "error", err)
 	}

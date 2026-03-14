@@ -27,6 +27,7 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	}
 
 	content := msg.Content
+	rootID := msg.Metadata["message_thread_id"]
 
 	// NO_REPLY: skip empty messages
 	if content == "" && len(msg.Media) == 0 {
@@ -62,13 +63,13 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 			if i == 0 {
 				ids = fileIDs
 			}
-			if err := c.sendPost(channelID, chunk, ids); err != nil {
+			if err := c.sendPost(channelID, chunk, ids, rootID); err != nil {
 				return fmt.Errorf("chatops send: %w", err)
 			}
 		}
 	} else if len(fileIDs) > 0 {
 		// Files only, no text
-		if err := c.sendPost(channelID, "", fileIDs); err != nil {
+		if err := c.sendPost(channelID, "", fileIDs, rootID); err != nil {
 			return fmt.Errorf("chatops send files: %w", err)
 		}
 	}
@@ -77,13 +78,17 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 }
 
 // sendPost sends a message to a Mattermost channel via REST API.
-func (c *Channel) sendPost(channelID, text string, fileIDs []string) error {
+// rootID, when non-empty, makes this a threaded reply under the given post.
+func (c *Channel) sendPost(channelID, text string, fileIDs []string, rootID string) error {
 	body := map[string]any{
 		"channel_id": channelID,
 		"message":    text,
 	}
 	if len(fileIDs) > 0 {
 		body["file_ids"] = fileIDs
+	}
+	if rootID != "" {
+		body["root_id"] = rootID
 	}
 
 	data, err := json.Marshal(body)
