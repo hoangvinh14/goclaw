@@ -19,10 +19,10 @@ type PendingMessagesHandler struct {
 	agentStore  store.AgentStore
 	token       string
 	providerReg *providers.Registry
-	keepRecent    int    // global keepRecent from config (0 = use default 15)
-	maxTokens     int    // max output tokens for LLM summarization (0 = use default)
-	cfgProvider   string // config-level provider override (empty = resolve from agent)
-	cfgModel      string // config-level model override (empty = resolve from agent)
+	keepRecent  int    // global keepRecent from config (0 = use default 15)
+	maxTokens   int    // max output tokens for LLM summarization (0 = use default)
+	cfgProvider string // config-level provider override (empty = resolve from agent)
+	cfgModel    string // config-level model override (empty = resolve from agent)
 }
 
 func NewPendingMessagesHandler(s store.PendingMessageStore, agentStore store.AgentStore, token string, providerReg *providers.Registry) *PendingMessagesHandler {
@@ -81,7 +81,7 @@ func (h *PendingMessagesHandler) handleListGroups(w http.ResponseWriter, r *http
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
 }
 
 // GET /v1/pending-messages/messages?channel=X&key=Y — list messages for a group
@@ -99,7 +99,7 @@ func (h *PendingMessagesHandler) handleListMessages(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"messages": msgs})
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
 // DELETE /v1/pending-messages?channel=X&key=Y — clear a group
@@ -169,7 +169,7 @@ func (h *PendingMessagesHandler) handleCompact(w http.ResponseWriter, r *http.Re
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "accepted", "method": "summarizing"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "method": "summarizing"})
 }
 
 // resolveProviderAndModel resolves the LLM provider+model for pending message compaction.

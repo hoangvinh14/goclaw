@@ -1,11 +1,17 @@
 package http
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
@@ -17,6 +23,14 @@ import (
 type StorageHandler struct {
 	baseDir string // resolved absolute path to ~/.goclaw/
 	token   string
+
+	// sizeCache caches the total storage size for 60 minutes.
+	sizeCache struct {
+		mu       sync.Mutex
+		total    int64
+		files    int
+		cachedAt time.Time
+	}
 }
 
 // NewStorageHandler creates a handler for workspace storage management.
@@ -29,6 +43,7 @@ func (h *StorageHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/storage/files", h.auth(h.handleList))
 	mux.HandleFunc("GET /v1/storage/files/{path...}", h.auth(h.handleRead))
 	mux.HandleFunc("DELETE /v1/storage/files/{path...}", h.auth(h.handleDelete))
+	mux.HandleFunc("GET /v1/storage/size", h.auth(h.handleSize))
 }
 
 func (h *StorageHandler) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -51,8 +66,8 @@ var protectedDirs = []string{"skills", "skills-store"}
 
 func isProtectedPath(rel string) bool {
 	top := rel
-	if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
-		top = rel[:i]
+	if before, _, ok := strings.Cut(rel, "/"); ok {
+		top = before
 	}
 	// Also handle forward slash on all platforms
 	if i := strings.IndexByte(top, '/'); i >= 0 {
@@ -66,8 +81,10 @@ func isProtectedPath(rel string) bool {
 	return false
 }
 
-// handleList lists all files and directories under ~/.goclaw/.
-// Optional query param ?path= scopes the listing to a subtree.
+// handleList lists files and directories under ~/.goclaw/ with depth limiting.
+// Query params:
+//   - ?path=  scopes the listing to a subtree
+//   - ?depth= max depth to walk (default 3, max 20)
 func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	locale := extractLocale(r)
 	subPath := r.URL.Query().Get("path")
@@ -75,6 +92,13 @@ func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("security.storage_traversal", "path", subPath)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidPath)})
 		return
+	}
+
+	maxDepth := 3
+	if d := r.URL.Query().Get("depth"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v >= 1 && v <= 20 {
+			maxDepth = v
+		}
 	}
 
 	rootDir := h.baseDir
@@ -88,18 +112,15 @@ func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type fileEntry struct {
-		Path      string `json:"path"`
-		Name      string `json:"name"`
-		IsDir     bool   `json:"isDir"`
-		Size      int64  `json:"size"`
-		TotalSize int64  `json:"totalSize"` // recursive size for directories
-		Protected bool   `json:"protected"` // true if deletion is blocked
+		Path        string `json:"path"`
+		Name        string `json:"name"`
+		IsDir       bool   `json:"isDir"`
+		Size        int64  `json:"size"`
+		HasChildren bool   `json:"hasChildren,omitempty"`
+		Protected   bool   `json:"protected"`
 	}
 
-	// Compute directory sizes via a two-pass approach:
-	// 1. Walk and collect entries + accumulate sizes per dir path
 	var entries []fileEntry
-	dirSizes := make(map[string]int64)
 
 	filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -123,6 +144,15 @@ func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
+		// Calculate depth relative to rootDir
+		relToRoot, _ := filepath.Rel(rootDir, path)
+		depth := strings.Count(relToRoot, string(filepath.Separator)) + 1
+
+		// At depth boundary: record dir but don't descend
+		if d.IsDir() && depth > maxDepth {
+			return filepath.SkipDir
+		}
+
 		entry := fileEntry{
 			Path:  rel,
 			Name:  d.Name(),
@@ -132,16 +162,13 @@ func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		if !d.IsDir() {
 			if info, err := d.Info(); err == nil {
 				entry.Size = info.Size()
-				// Accumulate file size into all parent directories
-				parent := filepath.Dir(rel)
-				for parent != "." && parent != "" {
-					dirSizes[parent] += info.Size()
-					parent = filepath.Dir(parent)
-				}
-				// Also accumulate to root if listing from base
-				if subPath == "" {
-					dirSizes["."] += info.Size()
-				}
+			}
+		}
+
+		// For directories at max depth, check if they have children
+		if d.IsDir() && depth == maxDepth {
+			if dirEntries, err := os.ReadDir(path); err == nil && len(dirEntries) > 0 {
+				entry.HasChildren = true
 			}
 		}
 
@@ -150,37 +177,92 @@ func (h *StorageHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// 2. Assign totalSize to directory entries
-	for i := range entries {
-		if entries[i].IsDir {
-			entries[i].TotalSize = dirSizes[entries[i].Path]
-		}
-	}
-
 	if entries == nil {
 		entries = []fileEntry{}
 	}
 
-	// Calculate total size of the root being listed
-	var totalSize int64
-	if subPath == "" {
-		totalSize = dirSizes["."]
-	} else {
-		rel, _ := filepath.Rel(h.baseDir, rootDir)
-		totalSize = dirSizes[rel]
-		// If rootDir is the listed subtree, also sum direct files
-		for _, e := range entries {
-			if !e.IsDir && filepath.Dir(e.Path) == rel {
-				totalSize += e.Size
-			}
-		}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"files":   entries,
+		"baseDir": h.baseDir,
+	})
+}
+
+// sizeCacheTTL is how long storage size calculations are cached.
+const sizeCacheTTL = 60 * time.Minute
+
+// handleSize streams the total storage size via SSE.
+// Cached for 60 minutes; returns cached result immediately if valid.
+func (h *StorageHandler) handleSize(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		locale := extractLocale(r)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgStreamingNotSupported)})
+		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"files":     entries,
-		"totalSize": totalSize,
-		"baseDir":   h.baseDir,
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Check cache
+	h.sizeCache.mu.Lock()
+	if !h.sizeCache.cachedAt.IsZero() && time.Since(h.sizeCache.cachedAt) < sizeCacheTTL {
+		total := h.sizeCache.total
+		files := h.sizeCache.files
+		h.sizeCache.mu.Unlock()
+		writeSizeEvent(w, flusher, map[string]any{"total": total, "files": files, "done": true, "cached": true})
+		return
+	}
+	h.sizeCache.mu.Unlock()
+
+	// Walk and stream progress
+	var total int64
+	var fileCount int
+	lastFlush := time.Now()
+
+	filepath.WalkDir(h.baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		// Check client disconnect
+		if r.Context().Err() != nil {
+			return filepath.SkipAll
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, _ := filepath.Rel(h.baseDir, path)
+		if skills.IsSystemArtifact(rel) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+			fileCount++
+		}
+		// Emit progress every 50 files or 200ms
+		if fileCount%50 == 0 || time.Since(lastFlush) > 200*time.Millisecond {
+			writeSizeEvent(w, flusher, map[string]any{"current": total, "files": fileCount})
+			lastFlush = time.Now()
+		}
+		return nil
 	})
+
+	// Update cache
+	h.sizeCache.mu.Lock()
+	h.sizeCache.total = total
+	h.sizeCache.files = fileCount
+	h.sizeCache.cachedAt = time.Now()
+	h.sizeCache.mu.Unlock()
+
+	// Send final event
+	writeSizeEvent(w, flusher, map[string]any{"total": total, "files": fileCount, "done": true, "cached": false})
+}
+
+func writeSizeEvent(w http.ResponseWriter, flusher http.Flusher, data map[string]any) {
+	jsonData, _ := json.Marshal(data)
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	flusher.Flush()
 }
 
 // handleRead reads a single file's content by relative path.
@@ -221,7 +303,23 @@ func (h *StorageHandler) handleRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	// Raw mode: serve the file with its native content type (for images, downloads, etc.)
+	if r.URL.Query().Get("raw") == "true" {
+		ct := mime.TypeByExtension(filepath.Ext(absPath))
+		if ct == "" {
+			ct = http.DetectContentType(data)
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		if r.URL.Query().Get("download") == "true" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(absPath)))
+		}
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		w.Write(data)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
 		"content": string(data),
 		"path":    relPath,
 		"size":    info.Size(),

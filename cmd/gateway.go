@@ -37,6 +37,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
+	"github.com/nextlevelbuilder/goclaw/internal/tasks"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/tracing"
 	"github.com/nextlevelbuilder/goclaw/pkg/browser"
@@ -753,8 +754,10 @@ func runGateway() {
 	// Supports media from any agent workspace (each agent has its own workspace from DB).
 	server.SetFilesHandler(httpapi.NewFilesHandler(cfg.Gateway.Token))
 
-	// Storage file management — browse/delete files under ~/.goclaw/ (excluding skills dirs).
-	server.SetStorageHandler(httpapi.NewStorageHandler(config.ExpandHome("~/.goclaw"), cfg.Gateway.Token))
+	// Storage file management — browse/delete files under the resolved workspace directory.
+	// Uses GOCLAW_WORKSPACE (or default ~/.goclaw/workspace) so it works correctly
+	// in Docker deployments where volumes are mounted outside ~/.goclaw/.
+	server.SetStorageHandler(httpapi.NewStorageHandler(workspace, cfg.Gateway.Token))
 
 	// Media upload endpoint — accepts multipart file uploads, returns temp path + MIME type.
 	server.SetMediaUploadHandler(httpapi.NewMediaUploadHandler(cfg.Gateway.Token))
@@ -1029,6 +1032,13 @@ func runGateway() {
 
 	go consumeInboundMessages(ctx, msgBus, agentRouter, cfg, sched, channelMgr, consumerTeamStore, quotaChecker, delegateMgr, pgStores.Sessions, pgStores.Agents, contactCollector)
 
+	// Task recovery ticker: re-dispatches stale/pending team tasks on startup and periodically.
+	var taskTicker *tasks.TaskTicker
+	if pgStores.Teams != nil {
+		taskTicker = tasks.NewTaskTicker(pgStores.Teams, pgStores.Agents, msgBus, cfg.Gateway.TaskRecoveryIntervalSec)
+		taskTicker.Start()
+	}
+
 	go func() {
 		sig := <-sigCh
 		slog.Info("graceful shutdown initiated", "signal", sig)
@@ -1036,9 +1046,12 @@ func runGateway() {
 		// Broadcast shutdown event
 		server.BroadcastEvent(*protocol.NewEvent(protocol.EventShutdown, nil))
 
-		// Stop channels and cron
+		// Stop channels, cron, and task ticker
 		channelMgr.StopAll(context.Background())
 		pgStores.Cron.Stop()
+		if taskTicker != nil {
+			taskTicker.Stop()
+		}
 
 		// Drain audit log queue before closing DB
 		if auditCh != nil {

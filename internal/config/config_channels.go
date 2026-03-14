@@ -46,9 +46,11 @@ type TelegramConfig struct {
 	GroupPolicy    string              `json:"group_policy,omitempty"`    // "open" (default), "allowlist", "disabled"
 	RequireMention *bool               `json:"require_mention,omitempty"` // require @bot mention in groups (default true)
 	HistoryLimit   int                 `json:"history_limit,omitempty"`   // max pending group messages for context (default 50, 0=disabled)
-	DMStream       *bool               `json:"dm_stream,omitempty"`       // enable streaming for DMs (default false) — edits placeholder progressively; disabled pending Telegram draft API fixes (tdesktop#10315)
-	GroupStream    *bool               `json:"group_stream,omitempty"`    // enable streaming for groups (default false) — sends new message, edits progressively
-	ReactionLevel  string              `json:"reaction_level,omitempty"`  // "off" (default), "minimal", "full" — status emoji reactions
+	DMStream         *bool               `json:"dm_stream,omitempty"`          // enable streaming for DMs (default false) — edits placeholder progressively
+	GroupStream      *bool               `json:"group_stream,omitempty"`      // enable streaming for groups (default false) — sends new message, edits progressively
+	DraftTransport   *bool               `json:"draft_transport,omitempty"`   // use sendMessageDraft for DM streaming (default true) — stealth preview, no notifications per edit
+	ReasoningStream  *bool               `json:"reasoning_stream,omitempty"`  // show reasoning as separate message when provider emits thinking events (default true)
+	ReactionLevel    string              `json:"reaction_level,omitempty"`    // "off" (default), "minimal", "full" — status emoji reactions
 	MediaMaxBytes  int64               `json:"media_max_bytes,omitempty"` // max media download size in bytes (default 20MB)
 	LinkPreview    *bool               `json:"link_preview,omitempty"`    // enable URL previews in messages (default true)
 	BlockReply     *bool               `json:"block_reply,omitempty"`     // override gateway block_reply (nil = inherit)
@@ -213,6 +215,7 @@ type ProvidersConfig struct {
 	Ollama      OllamaConfig    `json:"ollama"`       // local Ollama instance (no API key needed)
 	OllamaCloud ProviderConfig  `json:"ollama_cloud"` // Ollama Cloud (API key required)
 	ClaudeCLI   ClaudeCLIConfig `json:"claude_cli"`
+	ACP         ACPConfig       `json:"acp"`
 }
 
 // OllamaConfig configures a local (or self-hosted) Ollama instance.
@@ -227,6 +230,17 @@ type ClaudeCLIConfig struct {
 	Model       string `json:"model" yaml:"model"`                 // default model alias (default: "sonnet")
 	BaseWorkDir string `json:"base_work_dir" yaml:"base_work_dir"` // base dir for agent workspaces
 	PermMode    string `json:"perm_mode" yaml:"perm_mode"`         // permission mode (default: "bypassPermissions")
+}
+
+// ACPConfig configures the ACP (Agent Client Protocol) provider.
+// Orchestrates any ACP-compatible coding agent (Claude Code, Codex CLI, Gemini CLI) as a subprocess.
+type ACPConfig struct {
+	Binary   string   `json:"binary"`    // agent binary name or path (e.g. "claude", "codex")
+	Args     []string `json:"args"`      // extra spawn args
+	Model    string   `json:"model"`     // default model/agent name
+	WorkDir  string   `json:"work_dir"`  // base workspace dir
+	IdleTTL  string   `json:"idle_ttl"`  // process idle TTL (e.g. "5m")
+	PermMode string   `json:"perm_mode"` // "approve-all" (default), "approve-reads", "deny-all"
 }
 
 type ProviderConfig struct {
@@ -254,7 +268,8 @@ func (c *Config) HasAnyProvider() bool {
 		p.ZaiCoding.APIKey != "" ||
 		p.Ollama.Host != "" ||
 		p.OllamaCloud.APIKey != "" ||
-		p.ClaudeCLI.CLIPath != ""
+		p.ClaudeCLI.CLIPath != "" ||
+		p.ACP.Binary != ""
 }
 
 // QuotaWindow defines request limits per time window. Zero means unlimited.
@@ -289,8 +304,9 @@ type GatewayConfig struct {
 	InjectionAction   string       `json:"injection_action,omitempty"`    // prompt injection action: "log", "warn" (default), "block", "off"
 	InboundDebounceMs int          `json:"inbound_debounce_ms,omitempty"` // merge rapid messages from same sender (default 1000ms, -1 = disabled)
 	Quota             *QuotaConfig `json:"quota,omitempty"`               // per-user/group request quotas
-	BlockReply        *bool        `json:"block_reply,omitempty"`         // deliver intermediate text during tool iterations (default false)
-	ToolStatus        *bool        `json:"tool_status,omitempty"`         // show tool name in streaming preview during tool execution (default true)
+	BlockReply              *bool        `json:"block_reply,omitempty"`                // deliver intermediate text during tool iterations (default false)
+	ToolStatus              *bool        `json:"tool_status,omitempty"`                // show tool name in streaming preview during tool execution (default true)
+	TaskRecoveryIntervalSec int          `json:"task_recovery_interval_sec,omitempty"` // team task recovery ticker interval in seconds (default 300 = 5min)
 }
 
 // ToolsConfig controls tool availability, policy, and web search.

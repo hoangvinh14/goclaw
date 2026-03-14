@@ -10,7 +10,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ToolNameSelect } from "@/components/shared/tool-name-select";
+import { SkillNameSelect } from "@/components/shared/skill-name-select";
 import type { FieldDef } from "./channel-schemas";
+
+const INHERIT = "__inherit__";
 
 interface ChannelFieldsProps {
   fields: FieldDef[];
@@ -51,6 +55,9 @@ function FieldRenderer({
   isEdit?: boolean;
 }) {
   const { t } = useTranslation("channels");
+  // i18n: try "fieldConfig.<key>.label" / "fieldConfig.<key>.help", fall back to hardcoded schema string
+  const label = t(`fieldConfig.${field.key}.label`, { defaultValue: field.label });
+  const help = field.help ? t(`fieldConfig.${field.key}.help`, { defaultValue: field.help }) : "";
   const labelSuffix = field.required && !isEdit ? " *" : "";
   const editHint = isEdit && field.type === "password" ? ` ${t("form.credentialsHint")}` : "";
 
@@ -60,7 +67,7 @@ function FieldRenderer({
       return (
         <div className="grid gap-1.5">
           <Label htmlFor={id}>
-            {field.label}{labelSuffix}{editHint}
+            {label}{labelSuffix}{editHint}
           </Label>
           <Input
             id={id}
@@ -69,14 +76,14 @@ function FieldRenderer({
             onChange={(e) => onChange(e.target.value)}
             placeholder={field.placeholder}
           />
-          {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
       );
 
     case "number":
       return (
         <div className="grid gap-1.5">
-          <Label htmlFor={id}>{field.label}{labelSuffix}</Label>
+          <Label htmlFor={id}>{label}{labelSuffix}</Label>
           <Input
             id={id}
             type="number"
@@ -84,7 +91,7 @@ function FieldRenderer({
             onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)}
             placeholder={field.defaultValue !== undefined ? String(field.defaultValue) : undefined}
           />
-          {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
       );
 
@@ -96,15 +103,15 @@ function FieldRenderer({
             checked={(value as boolean) ?? (field.defaultValue as boolean) ?? false}
             onCheckedChange={(v) => onChange(v)}
           />
-          <Label htmlFor={id}>{field.label}</Label>
-          {field.help && <span className="text-xs text-muted-foreground ml-1">— {field.help}</span>}
+          <Label htmlFor={id}>{label}</Label>
+          {help && <span className="text-xs text-muted-foreground ml-1">— {help}</span>}
         </div>
       );
 
     case "select":
       return (
         <div className="grid gap-1.5">
-          <Label>{field.label}{labelSuffix}</Label>
+          <Label>{label}{labelSuffix}</Label>
           <Select
             value={(value as string) ?? (field.defaultValue as string) ?? ""}
             onValueChange={(v) => onChange(v)}
@@ -115,19 +122,128 @@ function FieldRenderer({
             <SelectContent>
               {field.options?.map((opt) => (
                 <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
+                  {t(`fieldOptions.${field.key}.${opt.value}`, { defaultValue: opt.label })}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+        </div>
+      );
+
+    case "tristate": {
+      // Tri-state: undefined = inherit, value = override.
+      // With options: select with Inherit + custom options (string value).
+      // Without options: select with Inherit/Yes/No (boolean value).
+      const inheritLabel = t("groupOverrides.fields.inherit", { defaultValue: "Inherit" });
+
+      if (field.options) {
+        // String tri-state (e.g. group_policy)
+        const allOptions = [{ value: INHERIT, label: inheritLabel }, ...field.options];
+        const selectValue = (value as string) || INHERIT;
+        return (
+          <div className="grid gap-1.5">
+            <Label>{label}</Label>
+            <Select
+              value={selectValue}
+              onValueChange={(v) => onChange(v === INHERIT ? undefined : v)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {allOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.value === INHERIT ? inheritLabel : t(`fieldOptions.${field.key}.${opt.value}`, { defaultValue: opt.label })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {help && <p className="text-xs text-muted-foreground">{help}</p>}
+          </div>
+        );
+      }
+
+      // Boolean tri-state (e.g. require_mention, enabled)
+      const yesLabel = t("groupOverrides.fields.yes", { defaultValue: "Yes" });
+      const noLabel = t("groupOverrides.fields.no", { defaultValue: "No" });
+      const triOptions = [
+        { value: INHERIT, label: inheritLabel },
+        { value: "true", label: yesLabel },
+        { value: "false", label: noLabel },
+      ];
+      const boolToStr = (v: unknown): string => {
+        if (v === undefined || v === null) return INHERIT;
+        return v ? "true" : "false";
+      };
+      const strToBool = (v: string): boolean | undefined => {
+        if (v === INHERIT) return undefined;
+        return v === "true";
+      };
+
+      return (
+        <div className="grid gap-1.5">
+          <Label>{label}</Label>
+          <Select value={boolToStr(value)} onValueChange={(v) => onChange(strToBool(v))}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {triOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+        </div>
+      );
+    }
+
+    case "textarea":
+      return (
+        <div className="grid gap-1.5">
+          <Label htmlFor={id}>{label}</Label>
+          <Textarea
+            id={id}
+            value={(value as string) ?? ""}
+            onChange={(e) => onChange(e.target.value || undefined)}
+            placeholder={field.placeholder}
+            rows={3}
+          />
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+        </div>
+      );
+
+    case "tool-select":
+      return (
+        <div className="grid gap-1.5">
+          <Label>{label}</Label>
+          <ToolNameSelect
+            value={(value as string[]) ?? []}
+            onChange={(v) => onChange(v.length > 0 ? v : undefined)}
+            placeholder={field.placeholder}
+          />
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+        </div>
+      );
+
+    case "skill-select":
+      return (
+        <div className="grid gap-1.5">
+          <Label>{label}</Label>
+          <SkillNameSelect
+            value={(value as string[]) ?? []}
+            onChange={(v) => onChange(v.length > 0 ? v : undefined)}
+            placeholder={field.placeholder}
+          />
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
       );
 
     case "tags":
       return (
         <div className="grid gap-1.5">
-          <Label htmlFor={id}>{field.label}</Label>
+          <Label htmlFor={id}>{label}</Label>
           <Textarea
             id={id}
             value={Array.isArray(value) ? (value as string[]).join("\n") : ""}
@@ -135,11 +251,11 @@ function FieldRenderer({
               const lines = e.target.value.split("\n").map((l) => l.trim()).filter(Boolean);
               onChange(lines.length > 0 ? lines : undefined);
             }}
-            placeholder={t("groupOverrides.fields.allowedUsersPlaceholder")}
+            placeholder={field.placeholder ?? t("groupOverrides.fields.allowedUsersPlaceholder")}
             rows={3}
             className="font-mono text-sm"
           />
-          {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
       );
 

@@ -94,7 +94,7 @@ func (h *MediaUploadHandler) handleUpload(w http.ResponseWriter, r *http.Request
 
 	mimeType := media.DetectMIMEType(origName)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"path":      tmpPath,
 		"mime_type": mimeType,
 		"filename":  origName,

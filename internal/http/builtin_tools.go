@@ -62,7 +62,7 @@ func (h *BuiltinToolsHandler) handleList(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "tools")})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"tools": result})
+	writeJSON(w, http.StatusOK, map[string]any{"tools": result})
 }
 
 func (h *BuiltinToolsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +90,7 @@ func (h *BuiltinToolsHandler) handleUpdate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var updates map[string]interface{}
+	var updates map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&updates); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return

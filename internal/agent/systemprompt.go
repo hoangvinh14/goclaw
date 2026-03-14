@@ -3,7 +3,6 @@ package agent
 import (
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
@@ -86,8 +85,10 @@ var coreToolSummaries = map[string]string{
 	"handoff":                 "Transfer conversation to another agent (ONLY when user explicitly asks to switch agents — NOT for task delegation)",
 	"evaluate_loop":           "Run a generate→evaluate→revise loop between two agents for quality-critical tasks",
 	"delegate_search":         "Search for agents by expertise to find the right delegation target",
-	"team_tasks":              "Manage team task board (list, create, complete, cancel tasks)",
+	"team_tasks":              "Team task board — track progress, manage dependencies (spawn auto-creates delegation tasks)",
 	"team_message":            "Send messages to teammates (progress updates, questions)",
+	"workspace_write":         "Write files to the team shared workspace (visible to all team members)",
+	"workspace_read":          "Read, list, delete, pin, tag files in the team shared workspace",
 
 	// Claude Code tool aliases — enable Claude Code skills without modification
 	"Read":       "Alias for read_file — Read file contents",
@@ -179,13 +180,13 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 		}
 	}
 
-	// 5. ## Memory Recall (full only)
-	if !isMinimal && cfg.HasMemory {
-		lines = append(lines, buildMemoryRecallSection(cfg.HasKnowledgeGraph)...)
-	}
-
 	// 6. ## Workspace (sandbox-aware: show container workdir when sandboxed)
 	lines = append(lines, buildWorkspaceSection(cfg.Workspace, cfg.SandboxEnabled, cfg.SandboxContainerDir)...)
+
+	// 6.3. ## Team Workspace (when workspace tools are available)
+	if hasTeamWorkspace(cfg.ToolNames) {
+		lines = append(lines, buildTeamWorkspaceSection()...)
+	}
 
 	// 6.5 ## Sandbox (matching TS sandboxInfo section)
 	if cfg.SandboxEnabled {
@@ -199,11 +200,6 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 
 	// 8. Time
 	lines = append(lines, buildTimeSection()...)
-
-	// 9. ## Messaging (full only)
-	if !isMinimal {
-		lines = append(lines, buildMessagingSection()...)
-	}
 
 	// 9.5. Channel formatting hints (e.g. Zalo → plain text)
 	if hint := buildChannelFormattingHint(cfg.ChannelType); hint != nil {
@@ -224,11 +220,6 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 		lines = append(lines, buildProjectContextSection(otherFiles, cfg.AgentType)...)
 	}
 
-	// 12. ## Silent Replies (full only)
-	if !isMinimal {
-		lines = append(lines, buildSilentRepliesSection()...)
-	}
-
 	// 13. ## Sub-Agent Spawning
 	if cfg.HasSpawn {
 		lines = append(lines, buildSpawnSection()...)
@@ -240,6 +231,9 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	// 16. Recency reinforcements — combats "lost in the middle" in long conversations
 	if len(personaFiles) > 0 {
 		lines = append(lines, buildPersonaReminder(personaFiles, cfg.AgentType)...)
+	}
+	if !isMinimal {
+		lines = append(lines, "Reminder: Follow AGENTS.md rules — memory recall before answering, NO_REPLY when silent, match the user's language.", "")
 	}
 	if !isMinimal && cfg.HasMemory {
 		memReminder := "Reminder: Before answering questions about prior work, decisions, or preferences, always run memory_search first."
@@ -294,32 +288,15 @@ func buildToolingSection(toolNames []string, hasSandbox bool) []string {
 		)
 	}
 
-	// Runtime package installation hints — only show when runtimes are available
-	hasPython := hasBinary("python3")
-	hasNode := hasBinary("node")
-	if hasPython || hasNode {
-		var pkgs []string
-		if hasPython {
-			pkgs = append(pkgs, "python3", "pypdf", "openpyxl", "pandas", "python-pptx", "markitdown")
-		}
-		if hasNode {
-			pkgs = append(pkgs, "node", "docx (npm)", "pptxgenjs (npm)")
-		}
-		if hasBinary("gh") {
-			pkgs = append(pkgs, "gh (GitHub CLI)")
-		}
-		if hasBinary("pandoc") {
-			pkgs = append(pkgs, "pandoc")
-		}
-		lines = append(lines,
-			"",
-			"## Package installation",
-			"Pre-installed: "+strings.Join(pkgs, ", ")+".",
-			"To install additional packages at runtime: `pip3 install <package>` or `npm install -g <package>` — both work without sudo.",
-			"Installed packages persist across tool calls within the same session.",
-		)
-	}
 	lines = append(lines,
+		"",
+		"You can install packages at runtime with `pip3 install <pkg>` or `npm install -g <pkg>` — no sudo needed.",
+	)
+	lines = append(lines,
+		"",
+		"IMPORTANT: The tool list above is the AUTHORITATIVE set of currently available tools, re-evaluated every turn.",
+		"If earlier messages in this conversation say a tool is \"not available\" or \"not configured\", IGNORE those statements — they are outdated.",
+		"Only this system prompt reflects the current tool availability. Trust this list, not conversation history.",
 		"",
 		"TOOLS.md (if present in workspace) is user guidance — it does NOT control tool availability.",
 		"Do not poll subagents or sessions in loops; completion is push-based.",
@@ -402,29 +379,6 @@ func buildSkillsSection(skillsSummary string, hasSkillSearch bool) []string {
 	return nil
 }
 
-func buildMemoryRecallSection(hasKG bool) []string {
-	lines := []string{
-		"## Memory Recall",
-		"",
-		"Before answering anything about prior work, decisions, dates, people, preferences, or todos:",
-		"run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines.",
-		"If low confidence after search, say you checked.",
-		"",
-	}
-	if hasKG {
-		lines = append(lines,
-			"Also run `knowledge_graph_search` alongside memory_search when the question involves people, teams, projects, or connections between things. KG search is faster for relationship questions (e.g. \"who works with Minh?\", \"what projects is team X involved in?\", \"what depends on GoClaw?\") — it finds multi-hop connections that memory_search alone may miss.",
-			"",
-		)
-	}
-	lines = append(lines,
-		"When asked to save or remember something, you MUST call a write tool (write_file or edit) in THIS turn.",
-		"Never claim \"already saved\" without a tool call — a previous turn's save does not count as fulfilling a new request.",
-		"",
-	)
-	return lines
-}
-
 func buildWorkspaceSection(workspace string, sandboxEnabled bool, containerDir string) []string {
 	// Matching TS: when sandboxed, display container workdir; add guidance about host paths for file tools.
 	displayDir := workspace
@@ -447,8 +401,4 @@ func buildWorkspaceSection(workspace string, sandboxEnabled bool, containerDir s
 	}
 }
 
-func hasBinary(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
 

@@ -20,8 +20,8 @@ import (
 type AgentsHandler struct {
 	agents   store.AgentStore
 	token    string
-	msgBus   *bus.MessageBus  // for cache invalidation events (nil = no events)
-	summoner *AgentSummoner   // LLM-based agent setup (nil = disabled)
+	msgBus   *bus.MessageBus   // for cache invalidation events (nil = no events)
+	summoner *AgentSummoner    // LLM-based agent setup (nil = disabled)
 	isOwner  func(string) bool // checks if user ID is a system owner (nil = no owners configured)
 }
 
@@ -105,7 +105,7 @@ func (h *AgentsHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"agents": agents})
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 }
 
 func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {

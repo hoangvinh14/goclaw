@@ -85,7 +85,7 @@ func (h *DelegationsHandler) handleList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"records": records,
 		"total":   total,
 	})
