@@ -43,12 +43,25 @@ type ThinkingCapable interface {
 	SupportsThinking() bool
 }
 
+// ModelThinkingCapable is optionally implemented by providers where thinking
+// support varies per model (e.g. DashScope: qwen3-max supports it, qwen3-plus does not).
+// This allows the agent loop to pass per-model capability hints to the provider.
+type ModelThinkingCapable interface {
+	ModelSupportsThinking(model string) bool
+}
+
 // ChatRequest contains the input for a Chat/ChatStream call.
 type ChatRequest struct {
 	Messages []Message        `json:"messages"`
 	Tools    []ToolDefinition `json:"tools,omitempty"`
 	Model    string           `json:"model,omitempty"`
 	Options  map[string]any   `json:"options,omitempty"`
+
+	// ModelSupportsThinking is set by the agent loop when the provider implements
+	// ModelThinkingCapable. Providers use this to decide whether to inject
+	// enable_thinking / thinking_budget parameters for the requested model.
+	// nil = unknown (assume capable, for backward compatibility).
+	ModelSupportsThinking *bool
 }
 
 // ChatResponse is the result from an LLM call.

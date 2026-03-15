@@ -479,6 +479,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		if l.thinkingLevel != "" && l.thinkingLevel != "off" {
 			if tc, ok := l.provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
 				chatReq.Options[providers.OptThinkingLevel] = l.thinkingLevel
+				// For providers with per-model thinking capability (e.g. DashScope),
+				// pre-compute whether this specific model supports thinking and pass it
+				// along so the provider doesn't need to re-derive it.
+				if mc, ok := l.provider.(providers.ModelThinkingCapable); ok {
+					supports := mc.ModelSupportsThinking(l.model)
+					chatReq.ModelSupportsThinking = &supports
+				}
 			} else {
 				slog.Debug("thinking_level ignored: provider does not support thinking",
 					"provider", l.provider.Name(), "level", l.thinkingLevel)

@@ -11,6 +11,23 @@ const (
 	dashscopeDefaultModel = "qwen3-max"
 )
 
+// dashscopeThinkingModels lists DashScope models that accept the
+// enable_thinking / thinking_budget parameters (Qwen3 open-weight and Qwen3.5 series).
+// Models NOT in this set (e.g. qwen3-plus, qwen3-turbo) will silently
+// skip thinking injection to avoid API "model not supported" errors.
+var dashscopeThinkingModels = map[string]bool{
+	// Qwen3.5 series — thinking + vision
+	"qwen3.5-plus":    true,
+	"qwen3.5-turbo":   true,
+	// Qwen3 hosted
+	"qwen3-max":       true,
+	// Qwen3 open-weight (available as hosted inference)
+	"qwen3-235b-a22b": true,
+	"qwen3-32b":       true,
+	"qwen3-14b":       true,
+	"qwen3-8b":        true,
+}
+
 // DashScopeProvider wraps OpenAIProvider to handle DashScope-specific behaviors.
 // Critical: DashScope does NOT support tools + streaming simultaneously.
 // When tools are present, ChatStream falls back to non-streaming Chat().
@@ -33,19 +50,41 @@ func NewDashScopeProvider(apiKey, apiBase, defaultModel string) *DashScopeProvid
 func (p *DashScopeProvider) Name() string           { return "dashscope" }
 func (p *DashScopeProvider) SupportsThinking() bool { return true }
 
+// ModelSupportsThinking implements ModelThinkingCapable.
+// Returns true only for models that accept enable_thinking / thinking_budget.
+func (p *DashScopeProvider) ModelSupportsThinking(model string) bool {
+	return dashscopeThinkingModels[p.resolveModel(model)]
+}
+
 // ChatStream handles DashScope's limitation: tools + streaming cannot coexist.
 // When tools are present, falls back to non-streaming Chat() and synthesizes
 // chunk callbacks for the caller.
 func (p *DashScopeProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk func(StreamChunk)) (*ChatResponse, error) {
-	// Map thinking_level to DashScope-specific params before passing to OpenAI base
+	// Map thinking_level to DashScope-specific params before passing to OpenAI base.
+	// Only inject enable_thinking for models that actually support it.
 	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
-		// Clone Options to avoid mutating caller's map
-		opts := make(map[string]any, len(req.Options)+2)
-		maps.Copy(opts, req.Options)
-		opts[OptEnableThinking] = true
-		opts[OptThinkingBudget] = dashscopeThinkingBudget(level)
-		delete(opts, OptThinkingLevel) // don't pass generic key to OpenAI buildRequestBody
-		req.Options = opts
+		// Determine if this model supports thinking:
+		//   1. Prefer the pre-computed hint from the agent loop (ModelSupportsThinking field).
+		//   2. Fall back to local map lookup.
+		var supportsThinking bool
+		if req.ModelSupportsThinking != nil {
+			supportsThinking = *req.ModelSupportsThinking
+		} else {
+			supportsThinking = p.ModelSupportsThinking(req.Model)
+		}
+
+		if supportsThinking {
+			// Clone Options to avoid mutating caller's map
+			opts := make(map[string]any, len(req.Options)+2)
+			maps.Copy(opts, req.Options)
+			opts[OptEnableThinking] = true
+			opts[OptThinkingBudget] = dashscopeThinkingBudget(level)
+			delete(opts, OptThinkingLevel) // don't pass generic key to OpenAI buildRequestBody
+			req.Options = opts
+		} else {
+			slog.Debug("dashscope: model does not support thinking, skipping enable_thinking",
+				"model", p.resolveModel(req.Model), "requested_level", level)
+		}
 	}
 
 	if len(req.Tools) > 0 {
