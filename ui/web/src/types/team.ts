@@ -32,6 +32,8 @@ export interface TeamData {
   created_by: string;
   created_at?: string;
   updated_at?: string;
+  member_count?: number;
+  members?: TeamMemberData[];
 }
 
 export interface TeamMemberData {
@@ -40,27 +42,18 @@ export interface TeamMemberData {
   agent_key?: string;
   display_name?: string;
   frontmatter?: string;
+  emoji?: string;
   role: "lead" | "member" | "reviewer";
   joined_at?: string;
 }
 
 export interface TeamWorkspaceFile {
-  id: string;
-  team_id: string;
-  channel: string;
+  name: string;
+  path: string;
+  size: number;
   chat_id: string;
-  file_name: string;
-  mime_type?: string;
-  size_bytes: number;
-  uploaded_by: string;
-  uploaded_by_key?: string;
-  task_id?: string;
-  pinned: boolean;
-  tags?: string[];
-  archived_at?: string;
-  created_at?: string;
+  is_dir?: boolean;
   updated_at?: string;
-  missing?: boolean;
 }
 
 export interface TeamTaskData {

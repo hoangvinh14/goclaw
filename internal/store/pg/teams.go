@@ -80,6 +80,7 @@ func (s *PGTeamStore) ListTeams(ctx context.Context) ([]store.TeamData, error) {
 	defer rows.Close()
 
 	var teams []store.TeamData
+	teamIndex := map[uuid.UUID]int{} // map team ID → index in teams slice
 	for rows.Next() {
 		var d store.TeamData
 		var desc sql.NullString
@@ -93,9 +94,46 @@ func (s *PGTeamStore) ListTeams(ctx context.Context) ([]store.TeamData, error) {
 		if desc.Valid {
 			d.Description = desc.String
 		}
+		teamIndex[d.ID] = len(teams)
 		teams = append(teams, d)
 	}
-	return teams, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Bulk-fetch all members for returned teams
+	if len(teams) > 0 {
+		mRows, err := s.db.QueryContext(ctx,
+			`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
+			 COALESCE(a.agent_key, '') AS agent_key,
+			 COALESCE(a.display_name, '') AS display_name,
+			 COALESCE(a.frontmatter, '') AS frontmatter,
+			 COALESCE(a.other_config->>'emoji', '') AS emoji
+			 FROM agent_team_members m
+			 JOIN agents a ON a.id = m.agent_id
+			 WHERE a.status = 'active'
+			 ORDER BY m.joined_at`)
+		if err != nil {
+			return nil, err
+		}
+		defer mRows.Close()
+
+		for mRows.Next() {
+			var m store.TeamMemberData
+			if err := mRows.Scan(&m.TeamID, &m.AgentID, &m.Role, &m.JoinedAt, &m.AgentKey, &m.DisplayName, &m.Frontmatter, &m.Emoji); err != nil {
+				return nil, err
+			}
+			if idx, ok := teamIndex[m.TeamID]; ok {
+				teams[idx].Members = append(teams[idx].Members, m)
+				teams[idx].MemberCount++
+			}
+		}
+		if err := mRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return teams, nil
 }
 
 // ============================================================
@@ -125,7 +163,8 @@ func (s *PGTeamStore) ListMembers(ctx context.Context, teamID uuid.UUID) ([]stor
 		`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
 		 COALESCE(a.agent_key, '') AS agent_key,
 		 COALESCE(a.display_name, '') AS display_name,
-		 COALESCE(a.frontmatter, '') AS frontmatter
+		 COALESCE(a.frontmatter, '') AS frontmatter,
+		 COALESCE(a.other_config->>'emoji', '') AS emoji
 		 FROM agent_team_members m
 		 JOIN agents a ON a.id = m.agent_id
 		 WHERE m.team_id = $1 AND a.status = 'active'
@@ -140,7 +179,7 @@ func (s *PGTeamStore) ListMembers(ctx context.Context, teamID uuid.UUID) ([]stor
 		var d store.TeamMemberData
 		if err := rows.Scan(
 			&d.TeamID, &d.AgentID, &d.Role, &d.JoinedAt,
-			&d.AgentKey, &d.DisplayName, &d.Frontmatter,
+			&d.AgentKey, &d.DisplayName, &d.Frontmatter, &d.Emoji,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +193,8 @@ func (s *PGTeamStore) ListIdleMembers(ctx context.Context, teamID uuid.UUID) ([]
 		`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
 		 COALESCE(a.agent_key, '') AS agent_key,
 		 COALESCE(a.display_name, '') AS display_name,
-		 COALESCE(a.frontmatter, '') AS frontmatter
+		 COALESCE(a.frontmatter, '') AS frontmatter,
+		 COALESCE(a.other_config->>'emoji', '') AS emoji
 		 FROM agent_team_members m
 		 JOIN agents a ON a.id = m.agent_id
 		 WHERE m.team_id = $1 AND a.status = 'active' AND m.role != $2
@@ -173,7 +213,7 @@ func (s *PGTeamStore) ListIdleMembers(ctx context.Context, teamID uuid.UUID) ([]
 		var d store.TeamMemberData
 		if err := rows.Scan(
 			&d.TeamID, &d.AgentID, &d.Role, &d.JoinedAt,
-			&d.AgentKey, &d.DisplayName, &d.Frontmatter,
+			&d.AgentKey, &d.DisplayName, &d.Frontmatter, &d.Emoji,
 		); err != nil {
 			return nil, err
 		}

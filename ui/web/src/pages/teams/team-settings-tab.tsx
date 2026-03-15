@@ -7,7 +7,6 @@ import { X, Save, Check, Bell, ShieldAlert, Clock, Info, FolderLock, FolderSync 
 import { useTranslation } from "react-i18next";
 import { CHANNEL_TYPES } from "@/constants/channels";
 import type { TeamData, TeamAccessSettings, EscalationMode, EscalationAction } from "@/types/team";
-import { ESCALATION_ACTIONS } from "@/types/team";
 import { useTeams } from "./hooks/use-teams";
 import { TeamVersionModal } from "./team-version-modal";
 
@@ -325,79 +324,22 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
         </div>
       </div>
 
-      {/* Escalation Policy (V2 only) */}
-      {isTeamV2 && <div className="space-y-4">
-        <h3 className="text-sm font-medium">{t("settings.escalationPolicy")}</h3>
+      {/* Escalation Policy (V2 only — coming soon) */}
+      {isTeamV2 && <div className="space-y-4 opacity-40 pointer-events-none select-none">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          {t("settings.escalationPolicy")}
+          <span className="rounded border px-1.5 py-0.5 text-[9px] font-normal text-muted-foreground">{t("settings.versionModal.comingSoon")}</span>
+        </h3>
         <div className="rounded-lg border bg-gradient-to-r from-orange-500/5 to-red-500/5 p-4">
           <div className="flex items-start gap-4">
             <div className="rounded-lg bg-orange-500/10 p-2.5 text-orange-600 dark:text-orange-400">
               <ShieldAlert className="h-5 w-5" />
             </div>
-            <div className="flex-1 space-y-4">
-              <div className="space-y-1">
-                <span className="text-sm font-semibold">{t("settings.escalationMode")}</span>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {t("settings.escalationModeHint")}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {([
-                  { value: "", labelKey: "escalationModeNone", descKey: "escalationModeNoneDesc" },
-                  { value: "auto", labelKey: "escalationModeAuto", descKey: "escalationModeAutoDesc" },
-                  { value: "review", labelKey: "escalationModeReview", descKey: "escalationModeReviewDesc" },
-                  { value: "reject", labelKey: "escalationModeReject", descKey: "escalationModeRejectDesc" },
-                ] as const).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEscalationMode(opt.value as EscalationMode | "")}
-                    className={
-                      "rounded-lg border p-3 text-left transition-colors " +
-                      (escalationMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:border-primary/50")
-                    }
-                  >
-                    <div className="text-sm font-medium">{t(`settings.${opt.labelKey}`)}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {t(`settings.${opt.descKey}`)}
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {escalationMode && (
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">{t("settings.escalationActions")}</label>
-                  <p className="text-xs text-muted-foreground">
-                    {t("settings.escalationActionsHint")}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {ESCALATION_ACTIONS.map((action) => (
-                      <button
-                        key={action}
-                        type="button"
-                        onClick={() => {
-                          setEscalationActions((prev) =>
-                            prev.includes(action)
-                              ? prev.filter((a) => a !== action)
-                              : [...prev, action],
-                          );
-                        }}
-                        className={
-                          "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors " +
-                          (escalationActions.includes(action)
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border text-muted-foreground hover:border-primary/50")
-                        }
-                      >
-                        {action}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div className="flex-1 space-y-1">
+              <span className="text-sm font-semibold">{t("settings.escalationMode")}</span>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {t("settings.escalationModeHint")}
+              </p>
             </div>
           </div>
         </div>

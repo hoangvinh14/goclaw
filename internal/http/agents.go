@@ -66,23 +66,7 @@ func (h *AgentsHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *AgentsHandler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.token != "" {
-			if extractBearerToken(r) != h.token {
-				locale := extractLocale(r)
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": i18n.T(locale, i18n.MsgUnauthorized)})
-				return
-			}
-		}
-		// Inject user_id and locale into context
-		userID := extractUserID(r)
-		ctx := store.WithLocale(r.Context(), extractLocale(r))
-		if userID != "" {
-			ctx = store.WithUserID(ctx, userID)
-		}
-		r = r.WithContext(ctx)
-		next(w, r)
-	}
+	return requireAuth(h.token, "", next)
 }
 
 func (h *AgentsHandler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -253,9 +237,10 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent changing owner_id
+	// Prevent changing owner_id; always enforce restrict_to_workspace
 	delete(updates, "owner_id")
 	delete(updates, "id")
+	updates["restrict_to_workspace"] = true
 
 	if err := h.agents.Update(r.Context(), id, updates); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

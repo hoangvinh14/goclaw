@@ -46,6 +46,8 @@
   },
   "create": {
     "title": "Tạo agent",
+    "emoji": "Biểu tượng",
+    "emojiHint": "Emoji tùy chọn",
     "displayName": "Tên hiển thị *",
     "displayNamePlaceholder": "Agent của tôi",
     "agentKey": "Khóa agent *",
@@ -120,7 +122,9 @@
     "active": "Hoạt động",
     "inactive": "Không hoạt động",
     "summonFailed": "Triệu hồi thất bại",
-    "defaultAgent": "Agent mặc định"
+    "defaultAgent": "Agent mặc định",
+    "emoji": "Biểu tượng",
+    "emojiHint": "Emoji tùy chọn"
   },
   "llmConfig": {
     "title": "Cấu hình LLM",

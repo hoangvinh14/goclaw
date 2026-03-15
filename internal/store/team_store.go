@@ -37,6 +37,7 @@ const (
 	TeamTaskStatusFailed     = "failed"
 	TeamTaskStatusInReview   = "in_review"
 	TeamTaskStatusCancelled  = "cancelled"
+	TeamTaskStatusStale      = "stale"
 )
 
 // Team task list filter constants (for ListTasks statusFilter parameter).
@@ -64,8 +65,12 @@ type TeamData struct {
 	CreatedBy   string          `json:"created_by"`
 
 	// Joined fields (populated by queries that JOIN agents table)
-	LeadAgentKey     string `json:"lead_agent_key,omitempty"`
-	LeadDisplayName  string `json:"lead_display_name,omitempty"`
+	LeadAgentKey    string `json:"lead_agent_key,omitempty"`
+	LeadDisplayName string `json:"lead_display_name,omitempty"`
+
+	// Enriched fields (populated by ListTeams)
+	MemberCount int              `json:"member_count"`
+	Members     []TeamMemberData `json:"members,omitempty"`
 }
 
 // TeamMemberData represents a team member.
@@ -79,6 +84,7 @@ type TeamMemberData struct {
 	AgentKey    string `json:"agent_key,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Frontmatter string `json:"frontmatter,omitempty"`
+	Emoji       string `json:"emoji,omitempty"`
 }
 
 // TeamTaskData represents a task in the team's shared task list.
@@ -342,6 +348,9 @@ type TeamStore interface {
 	// FailTask marks an in_progress task as failed and stores the error message.
 	// Unblocks dependent tasks so they aren't stuck.
 	FailTask(ctx context.Context, taskID, teamID uuid.UUID, errMsg string) error
+	// FailPendingTask marks a pending or blocked task as failed (post-turn validation).
+	// Unlike FailTask, accepts pending/blocked source statuses.
+	FailPendingTask(ctx context.Context, taskID, teamID uuid.UUID, errMsg string) error
 
 	// Review workflow
 	ReviewTask(ctx context.Context, taskID, teamID uuid.UUID) error
@@ -355,6 +364,8 @@ type TeamStore interface {
 	// Audit events
 	RecordTaskEvent(ctx context.Context, event *TeamTaskEventData) error
 	ListTaskEvents(ctx context.Context, taskID uuid.UUID) ([]TeamTaskEventData, error)
+	// ListTeamEvents returns recent events across all tasks in a team.
+	ListTeamEvents(ctx context.Context, teamID uuid.UUID, limit, offset int) ([]TeamTaskEventData, error)
 
 	// Attachments
 	AttachFileToTask(ctx context.Context, att *TeamTaskAttachmentData) error
@@ -373,9 +384,16 @@ type TeamStore interface {
 	// SetFollowupForActiveTasks sets followup on in_progress tasks that don't already have one.
 	// Matches tasks scoped to the given channel+chatID, or unscoped tasks in the same team.
 	SetFollowupForActiveTasks(ctx context.Context, teamID uuid.UUID, channel, chatID string, followupAt time.Time, max int, message string) (int, error)
+	// HasActiveMemberTasks returns true if there are pending/in_progress/blocked tasks
+	// assigned to agents other than the given agent (typically the lead).
+	// Used to suppress auto-followup when the lead is waiting for teammates, not the user.
+	HasActiveMemberTasks(ctx context.Context, teamID uuid.UUID, excludeAgentID uuid.UUID) (bool, error)
 
 	// Progress
 	UpdateTaskProgress(ctx context.Context, taskID, teamID uuid.UUID, percent int, step string) error
+
+	// Lock renewal (heartbeat to prevent stale recovery of long-running tasks)
+	RenewTaskLock(ctx context.Context, taskID, teamID uuid.UUID) error
 
 	// Stale recovery
 	RecoverStaleTasks(ctx context.Context, teamID uuid.UUID) (int, error)
@@ -384,6 +402,10 @@ type TeamStore interface {
 	ForceRecoverAllTasks(ctx context.Context, teamID uuid.UUID) (int, error)
 	// ListRecoverableTasks returns all pending tasks (including stale in_progress with expired locks).
 	ListRecoverableTasks(ctx context.Context, teamID uuid.UUID) ([]TeamTaskData, error)
+	// MarkStaleTasks sets pending tasks older than olderThan to stale status.
+	MarkStaleTasks(ctx context.Context, teamID uuid.UUID, olderThan time.Time) (int, error)
+	// ResetTaskStatus resets a stale or failed task back to pending for retry.
+	ResetTaskStatus(ctx context.Context, taskID, teamID uuid.UUID) error
 
 	// Delegation history
 	SaveDelegationHistory(ctx context.Context, record *DelegationHistoryData) error

@@ -46,6 +46,8 @@
   },
   "create": {
     "title": "创建Agent",
+    "emoji": "图标",
+    "emojiHint": "可选的表情图标",
     "displayName": "显示名称 *",
     "displayNamePlaceholder": "我的Agent",
     "agentKey": "Agent标识 *",
@@ -120,7 +122,9 @@
     "active": "活跃",
     "inactive": "非活跃",
     "summonFailed": "召唤失败",
-    "defaultAgent": "默认Agent"
+    "defaultAgent": "默认Agent",
+    "emoji": "图标",
+    "emojiHint": "可选的表情图标"
   },
   "llmConfig": {
     "title": "LLM 配置",

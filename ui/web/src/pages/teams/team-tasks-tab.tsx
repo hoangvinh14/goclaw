@@ -54,8 +54,8 @@ const v2Filters: { value: StatusFilter; labelKey: string }[] = [
 export function TeamTasksTab({
   teamId, members, scopes, isTeamV2,
   getTeamTasks,
-  getTaskDetail, approveTask, rejectTask, addTaskComment,
-  createTask, assignTask,
+  getTaskDetail,
+  createTask,
 }: TeamTasksTabProps) {
   const { t } = useTranslation("teams");
   const [tasks, setTasks] = useState<TeamTaskData[]>([]);
@@ -197,10 +197,6 @@ export function TeamTasksTab({
         members={members}
         isTeamV2={isTeamV2}
         getTaskDetail={getTaskDetail}
-        approveTask={approveTask}
-        rejectTask={rejectTask}
-        addTaskComment={addTaskComment}
-        assignTask={assignTask}
       />
 
       {/* Create Task Dialog */}

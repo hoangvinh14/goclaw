@@ -129,10 +129,22 @@ const (
 	MethodTeamsWorkspaceDelete = "teams.workspace.delete"
 )
 
+// Team events
+const (
+	MethodTeamsEventsList = "teams.events.list"
+)
+
 // Delegation history
 const (
 	MethodDelegationsList = "delegations.list"
 	MethodDelegationsGet  = "delegations.get"
+)
+
+// API key management
+const (
+	MethodAPIKeysList   = "api_keys.list"
+	MethodAPIKeysCreate = "api_keys.create"
+	MethodAPIKeysRevoke = "api_keys.revoke"
 )
 
 // Phase 3+ - NICE TO HAVE methods

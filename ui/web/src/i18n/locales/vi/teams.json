@@ -7,6 +7,8 @@
   "emptyDescription": "Tạo Team đầu tiên để bắt đầu.",
   "noMatchTitle": "Không tìm thấy Team phù hợp",
   "noMatchDescription": "Thử từ khóa tìm kiếm khác.",
+  "viewCard": "Dạng thẻ",
+  "viewList": "Dạng danh sách",
   "scope": {
     "all": "Tất cả phạm vi",
     "label": "Phạm vi"
@@ -20,6 +22,7 @@
     "lead": "Trưởng nhóm",
     "memberCount": "{{count}} thành viên",
     "memberCountPlural": "{{count}} thành viên",
+    "more": "khác",
     "deleteDescription": "Bạn có chắc chắn muốn xóa \"{{name}}\"? Tất cả thành viên, nhiệm vụ và cấu hình sẽ bị xóa vĩnh viễn.",
     "tabs": {
       "tasks": "Nhiệm vụ",
@@ -64,6 +67,8 @@
     "unassigned": "Chưa gán",
     "filters": {
       "active": "Đang hoạt động",
+      "pending": "Chờ xử lý",
+      "inProgress": "Đang chạy",
       "inReview": "Chờ duyệt",
       "completed": "Đã hoàn thành",
       "all": "Tất cả"
@@ -224,6 +229,7 @@
       "autoRecoveryDesc": "Nhiệm vụ bị treo tự đặt lại sau thời gian chờ",
       "escalationPolicy": "Chính sách leo thang",
       "escalationPolicyDesc": "Kiểm soát những gì agent có thể tự thực hiện",
+      "comingSoon": "Sắp ra mắt",
       "downgradeNote": "Hạ cấp an toàn — dữ liệu V2 được giữ lại nhưng ẩn đi.",
       "betaNote": "V2 hiện đang ở giai đoạn Beta.",
       "gotIt": "Đã hiểu"
@@ -264,5 +270,25 @@
     "taskAssigned": "Đã gán nhiệm vụ",
     "failedCreateTask": "Không thể tạo nhiệm vụ",
     "failedAssignTask": "Không thể gán nhiệm vụ"
+  },
+  "board": {
+    "kanban": "Bảng",
+    "list": "Danh sách",
+    "groupBy": "Nhóm theo",
+    "groupByStatus": "Trạng thái",
+    "groupByOwner": "Người phụ trách",
+    "groupByType": "Loại",
+    "running": "Đang chạy",
+    "locked": "Agent đang chạy",
+    "emptyColumn": "Không có task",
+    "unassigned": "Chưa gán",
+    "createViaChat": "Chat với agent của team để tạo task"
+  },
+  "sidebar": {
+    "members": "Thành viên",
+    "workspace": "Không gian làm việc",
+    "delegations": "Ủy quyền",
+    "settings": "Cài đặt",
+    "addMember": "Thêm thành viên"
   }
 }

@@ -44,6 +44,7 @@ type Loop struct {
 	provider      providers.Provider
 	model         string
 	contextWindow int
+	maxTokens     int // max output tokens per LLM call (0 = default 8192)
 	maxIterations int
 	maxToolCalls  int
 	workspace        string
@@ -115,6 +116,9 @@ type Loop struct {
 	// Team store for cross-session pending task detection
 	teamStore store.TeamStore
 
+	// Secure CLI store for credentialed exec context injection
+	secureCLIStore store.SecureCLIStore
+
 	// Persistent media storage for cross-turn image/document access
 	mediaStore *media.Store
 
@@ -152,6 +156,7 @@ type LoopConfig struct {
 	Provider        providers.Provider
 	Model           string
 	ContextWindow   int
+	MaxTokens       int // max output tokens per LLM call (0 = default 8192)
 	MaxIterations   int
 	MaxToolCalls    int
 	Workspace        string
@@ -220,6 +225,9 @@ type LoopConfig struct {
 	// Team store for cross-session pending task detection
 	TeamStore store.TeamStore
 
+	// Secure CLI store for credentialed exec context injection
+	SecureCLIStore store.SecureCLIStore
+
 	// Persistent media storage for cross-turn image/document access
 	MediaStore *media.Store
 
@@ -229,6 +237,16 @@ type LoopConfig struct {
 	// Budget enforcement
 	BudgetMonthlyCents int
 	TracingStore       store.TracingStore
+}
+
+const defaultMaxTokens = 8192
+
+// effectiveMaxTokens returns the configured max output tokens, defaulting to 8192.
+func (l *Loop) effectiveMaxTokens() int {
+	if l.maxTokens > 0 {
+		return l.maxTokens
+	}
+	return defaultMaxTokens
 }
 
 func NewLoop(cfg LoopConfig) *Loop {
@@ -261,6 +279,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		provider:               cfg.Provider,
 		model:                  cfg.Model,
 		contextWindow:          cfg.ContextWindow,
+		maxTokens:              cfg.MaxTokens,
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
 		workspace:              cfg.Workspace,
@@ -297,6 +316,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		selfEvolve:             cfg.SelfEvolve,
 		groupWriterCache:       cfg.GroupWriterCache,
 		teamStore:              cfg.TeamStore,
+		secureCLIStore:         cfg.SecureCLIStore,
 		mediaStore:             cfg.MediaStore,
 		modelPricing:           cfg.ModelPricing,
 		budgetMonthlyCents:     cfg.BudgetMonthlyCents,
@@ -325,6 +345,7 @@ type RunRequest struct {
 	LocalKey          string          // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
 	ParentTraceID     uuid.UUID       // if set, reuse parent trace instead of creating new (announce runs)
 	ParentRootSpanID  uuid.UUID       // if set, nest announce agent span under this parent span
+	LinkedTraceID     uuid.UUID       // if set, create new trace with parent_trace_id pointing to this (team task runs)
 	TraceName         string          // override trace name (default: "chat <agentID>")
 	TraceTags         []string        // additional tags for the trace (e.g. "cron")
 	MaxIterations     int             // per-request override (0 = use agent default, must be lower)
@@ -348,6 +369,9 @@ type RunRequest struct {
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string
 	WorkspaceChatID  string
+	// TeamWorkspace overrides the member agent's workspace with the team's workspace
+	// so file operations (read/write/image/audio) use the shared team directory.
+	TeamWorkspace string
 }
 
 // RunResult is the output of a completed agent run.

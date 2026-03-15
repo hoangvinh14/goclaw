@@ -7,6 +7,8 @@
   "emptyDescription": "创建您的第一个Team以开始使用。",
   "noMatchTitle": "未找到匹配Team",
   "noMatchDescription": "请尝试其他搜索词。",
+  "viewCard": "卡片视图",
+  "viewList": "列表视图",
   "scope": {
     "all": "所有范围",
     "label": "范围"
@@ -20,6 +22,7 @@
     "lead": "负责人",
     "memberCount": "{{count}} 位成员",
     "memberCountPlural": "{{count}} 位成员",
+    "more": "更多",
     "deleteDescription": "确定要删除「{{name}}」吗？所有成员、任务和配置将被永久移除。",
     "tabs": {
       "tasks": "任务",
@@ -64,6 +67,8 @@
     "unassigned": "未分配",
     "filters": {
       "active": "进行中",
+      "pending": "待处理",
+      "inProgress": "处理中",
       "inReview": "待审核",
       "completed": "已完成",
       "all": "全部"
@@ -224,6 +229,7 @@
       "autoRecoveryDesc": "卡住的任务在超时后自动重置",
       "escalationPolicy": "升级策略",
       "escalationPolicyDesc": "控制代理可以自主执行的操作",
+      "comingSoon": "即将推出",
       "downgradeNote": "降级是安全的 — V2数据会保留但隐藏。",
       "betaNote": "V2目前处于Beta阶段。",
       "gotIt": "知道了"
@@ -264,5 +270,25 @@
     "taskAssigned": "任务已分配",
     "failedCreateTask": "创建任务失败",
     "failedAssignTask": "分配任务失败"
+  },
+  "board": {
+    "kanban": "看板",
+    "list": "列表",
+    "groupBy": "分组",
+    "groupByStatus": "状态",
+    "groupByOwner": "负责人",
+    "groupByType": "类型",
+    "running": "运行中",
+    "locked": "代理正在运行",
+    "emptyColumn": "暂无任务",
+    "unassigned": "未分配",
+    "createViaChat": "与团队代理聊天以创建任务"
+  },
+  "sidebar": {
+    "members": "成员",
+    "workspace": "工作区",
+    "delegations": "委派",
+    "settings": "设置",
+    "addMember": "添加成员"
   }
 }

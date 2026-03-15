@@ -32,6 +32,7 @@ import enStorage from "./locales/en/storage.json";
 import enPendingMessages from "./locales/en/pending-messages.json";
 import enContacts from "./locales/en/contacts.json";
 import enActivity from "./locales/en/activity.json";
+import enApiKeys from "./locales/en/api-keys.json";
 
 // --- VI namespaces ---
 import viCommon from "./locales/vi/common.json";
@@ -64,6 +65,7 @@ import viStorage from "./locales/vi/storage.json";
 import viPendingMessages from "./locales/vi/pending-messages.json";
 import viContacts from "./locales/vi/contacts.json";
 import viActivity from "./locales/vi/activity.json";
+import viApiKeys from "./locales/vi/api-keys.json";
 
 // --- ZH namespaces ---
 import zhCommon from "./locales/zh/common.json";
@@ -96,6 +98,7 @@ import zhStorage from "./locales/zh/storage.json";
 import zhPendingMessages from "./locales/zh/pending-messages.json";
 import zhContacts from "./locales/zh/contacts.json";
 import zhActivity from "./locales/zh/activity.json";
+import zhApiKeys from "./locales/zh/api-keys.json";
 
 const STORAGE_KEY = "goclaw:language";
 
@@ -113,7 +116,7 @@ const ns = [
   "agents", "teams", "sessions", "skills", "cron", "config",
   "channels", "providers", "traces", "events", "delegations",
   "usage", "approvals", "nodes", "logs", "tools", "mcp", "tts",
-  "setup", "memory", "storage", "pending-messages", "contacts", "activity",
+  "setup", "memory", "storage", "pending-messages", "contacts", "activity", "api-keys",
 ] as const;
 
 i18n.use(initReactI18next).init({
@@ -127,7 +130,7 @@ i18n.use(initReactI18next).init({
       approvals: enApprovals, nodes: enNodes, logs: enLogs, tools: enTools,
       mcp: enMcp, tts: enTts, setup: enSetup, memory: enMemory, storage: enStorage,
       "pending-messages": enPendingMessages,
-      contacts: enContacts, activity: enActivity,
+      contacts: enContacts, activity: enActivity, "api-keys": enApiKeys,
     },
     vi: {
       common: viCommon, sidebar: viSidebar, topbar: viTopbar, login: viLogin,
@@ -138,7 +141,7 @@ i18n.use(initReactI18next).init({
       approvals: viApprovals, nodes: viNodes, logs: viLogs, tools: viTools,
       mcp: viMcp, tts: viTts, setup: viSetup, memory: viMemory, storage: viStorage,
       "pending-messages": viPendingMessages,
-      contacts: viContacts, activity: viActivity,
+      contacts: viContacts, activity: viActivity, "api-keys": viApiKeys,
     },
     zh: {
       common: zhCommon, sidebar: zhSidebar, topbar: zhTopbar, login: zhLogin,
@@ -149,7 +152,7 @@ i18n.use(initReactI18next).init({
       approvals: zhApprovals, nodes: zhNodes, logs: zhLogs, tools: zhTools,
       mcp: zhMcp, tts: zhTts, setup: zhSetup, memory: zhMemory, storage: zhStorage,
       "pending-messages": zhPendingMessages,
-      contacts: zhContacts, activity: zhActivity,
+      contacts: zhContacts, activity: zhActivity, "api-keys": zhApiKeys,
     },
   },
   ns: [...ns],
