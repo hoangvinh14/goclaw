@@ -61,7 +61,7 @@ type ChatRequest struct {
 	// ModelThinkingCapable. Providers use this to decide whether to inject
 	// enable_thinking / thinking_budget parameters for the requested model.
 	// nil = unknown (assume capable, for backward compatibility).
-	ModelSupportsThinking *bool
+	ModelSupportsThinking *bool `json:"-"`
 }
 
 // ChatResponse is the result from an LLM call.

@@ -56,36 +56,51 @@ func (p *DashScopeProvider) ModelSupportsThinking(model string) bool {
 	return dashscopeThinkingModels[p.resolveModel(model)]
 }
 
+// applyThinkingGuard maps thinking_level to DashScope-specific params
+// (enable_thinking / thinking_budget) only when the model supports it.
+// Returns the (possibly mutated) request. Shared by Chat and ChatStream.
+func (p *DashScopeProvider) applyThinkingGuard(req ChatRequest) ChatRequest {
+	level, ok := req.Options[OptThinkingLevel].(string)
+	if !ok || level == "" || level == "off" {
+		return req
+	}
+
+	// Determine if this model supports thinking:
+	//   1. Prefer the pre-computed hint from the agent loop (ModelSupportsThinking field).
+	//   2. Fall back to local map lookup.
+	var supportsThinking bool
+	if req.ModelSupportsThinking != nil {
+		supportsThinking = *req.ModelSupportsThinking
+	} else {
+		supportsThinking = p.ModelSupportsThinking(req.Model)
+	}
+
+	if supportsThinking {
+		// Clone Options to avoid mutating caller's map
+		opts := make(map[string]any, len(req.Options)+2)
+		maps.Copy(opts, req.Options)
+		opts[OptEnableThinking] = true
+		opts[OptThinkingBudget] = dashscopeThinkingBudget(level)
+		delete(opts, OptThinkingLevel) // don't pass generic key to OpenAI buildRequestBody
+		req.Options = opts
+	} else {
+		slog.Debug("dashscope: model does not support thinking, skipping enable_thinking",
+			"model", p.resolveModel(req.Model), "requested_level", level)
+	}
+
+	return req
+}
+
+// Chat overrides OpenAIProvider.Chat to apply the per-model thinking guard.
+func (p *DashScopeProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	return p.OpenAIProvider.Chat(ctx, p.applyThinkingGuard(req))
+}
+
 // ChatStream handles DashScope's limitation: tools + streaming cannot coexist.
 // When tools are present, falls back to non-streaming Chat() and synthesizes
 // chunk callbacks for the caller.
 func (p *DashScopeProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk func(StreamChunk)) (*ChatResponse, error) {
-	// Map thinking_level to DashScope-specific params before passing to OpenAI base.
-	// Only inject enable_thinking for models that actually support it.
-	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
-		// Determine if this model supports thinking:
-		//   1. Prefer the pre-computed hint from the agent loop (ModelSupportsThinking field).
-		//   2. Fall back to local map lookup.
-		var supportsThinking bool
-		if req.ModelSupportsThinking != nil {
-			supportsThinking = *req.ModelSupportsThinking
-		} else {
-			supportsThinking = p.ModelSupportsThinking(req.Model)
-		}
-
-		if supportsThinking {
-			// Clone Options to avoid mutating caller's map
-			opts := make(map[string]any, len(req.Options)+2)
-			maps.Copy(opts, req.Options)
-			opts[OptEnableThinking] = true
-			opts[OptThinkingBudget] = dashscopeThinkingBudget(level)
-			delete(opts, OptThinkingLevel) // don't pass generic key to OpenAI buildRequestBody
-			req.Options = opts
-		} else {
-			slog.Debug("dashscope: model does not support thinking, skipping enable_thinking",
-				"model", p.resolveModel(req.Model), "requested_level", level)
-		}
-	}
+	req = p.applyThinkingGuard(req)
 
 	if len(req.Tools) > 0 {
 		slog.Debug("dashscope: tools present, falling back to non-streaming Chat")

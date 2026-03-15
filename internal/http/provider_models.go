@@ -230,7 +230,6 @@ func dashScopeModels() []ModelInfo {
 	}
 }
 
-
 // sunoModels returns a hardcoded list of Suno music generation models.
 func sunoModels() []ModelInfo {
 	return []ModelInfo{
