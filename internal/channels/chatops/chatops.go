@@ -218,7 +218,9 @@ func (c *Channel) listenLoop(ctx context.Context) {
 	}
 }
 
-// connectWS establishes a WebSocket connection and sends the auth challenge.
+// connectWS establishes a WebSocket connection with Bearer token authentication.
+// Uses Authorization header for the WS upgrade handshake (standard for bot/PAT tokens).
+// Falls back to authentication_challenge for older Mattermost versions.
 func (c *Channel) connectWS(ctx context.Context) (*websocket.Conn, error) {
 	wsURL := c.serverURL + "/api/v4/websocket"
 	// Convert http(s) to ws(s)
@@ -231,12 +233,19 @@ func (c *Channel) connectWS(ctx context.Context) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+
+	// Authenticate via Authorization header during WS upgrade handshake.
+	// This is the recommended method for bot tokens and personal access tokens.
+	headers := http.Header{
+		"Authorization": []string{"Bearer " + c.token},
+	}
+	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 
-	// Send authentication challenge
+	// Also send authentication_challenge as fallback for older Mattermost versions
+	// that don't support header-based WS auth.
 	authMsg := map[string]any{
 		"seq":    1,
 		"action": "authentication_challenge",

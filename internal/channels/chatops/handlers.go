@@ -11,8 +11,11 @@ import (
 )
 
 // handleEvent routes WebSocket events by type.
+// Mattermost Chatops clusters relay cross-node events with a
+// "custom_websocket-event_" prefix; strip it so standard handlers match.
 func (c *Channel) handleEvent(event map[string]any) {
 	eventType, _ := event["event"].(string)
+	eventType = strings.TrimPrefix(eventType, "custom_websocket-event_")
 	switch eventType {
 	case "posted":
 		c.handlePosted(event)
