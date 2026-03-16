@@ -53,7 +53,11 @@ func (c *Channel) handlePosted(event map[string]any) {
 		return
 	}
 
-	if message == "" {
+	// Extract file attachments from post metadata
+	files := extractFileInfos(post)
+
+	// Skip messages with no content AND no files
+	if message == "" && len(files) == 0 {
 		return
 	}
 
@@ -99,7 +103,7 @@ func (c *Channel) handlePosted(event map[string]any) {
 		localKey = fmt.Sprintf("%s:thread:%s", channelID, replyRootID)
 	}
 
-	// Mention gating in groups
+	// Mention gating in groups (BEFORE file download to avoid wasting bandwidth)
 	if !isDM && c.requireMention {
 		mentioned := strings.Contains(content, "@"+c.botUsername)
 		if !mentioned {
@@ -117,13 +121,41 @@ func (c *Channel) handlePosted(event map[string]any) {
 
 	// Strip mention from content
 	content = TrimMention(content, c.botUsername)
-	if content == "" {
+	if content == "" && len(files) == 0 {
 		return
+	}
+
+	// Process file attachments (deferred until after mention gate to avoid
+	// downloading files for unmentioned messages, matching Telegram pattern)
+	var mediaPaths []string
+	if len(files) > 0 {
+		items, docContent := c.resolveMedia(files)
+		for _, item := range items {
+			if item.FilePath != "" {
+				mediaPaths = append(mediaPaths, item.FilePath)
+			}
+		}
+		mediaTags := buildMediaTags(items)
+		if mediaTags != "" {
+			if content != "" {
+				content = mediaTags + "\n\n" + content
+			} else {
+				content = mediaTags
+			}
+		}
+		if docContent != "" {
+			if content != "" {
+				content = content + "\n\n" + docContent
+			} else {
+				content = docContent
+			}
+		}
 	}
 
 	slog.Debug("chatops message received",
 		"sender_id", userID, "channel_id", channelID,
-		"is_dm", isDM, "preview", channels.Truncate(content, 50))
+		"is_dm", isDM, "has_files", len(files) > 0,
+		"preview", channels.Truncate(content, 50))
 
 	// Build final content with group history context
 	finalContent := content
@@ -147,7 +179,7 @@ func (c *Channel) handlePosted(event map[string]any) {
 		metadata["message_thread_id"] = replyRootID
 	}
 
-	c.HandleMessage(compoundSenderID, channelID, finalContent, nil, metadata, peerKind)
+	c.HandleMessage(compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind)
 
 	if peerKind == "group" {
 		c.groupHistory.Clear(localKey)
