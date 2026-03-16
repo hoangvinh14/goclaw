@@ -44,7 +44,3 @@ k8s-*/*
 tests/**/creds.json
 ui/simple-saas
 *.tar
-
-.agent/
-.agents/
-cmd/
