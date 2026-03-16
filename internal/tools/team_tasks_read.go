@@ -165,6 +165,11 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]any) *R
 		filterUserID = store.UserIDFromContext(ctx)
 	}
 	chatID := ToolChatIDFromCtx(ctx)
+	// Shared workspace: show all tasks across chats.
+	listChatID := chatID
+	if IsSharedWorkspace(team.Settings) {
+		listChatID = ""
+	}
 
 	// Acquire team create lock to serialize list→create flows across concurrent goroutines.
 	if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil && !ptd.HasListed() {
@@ -174,7 +179,7 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]any) *R
 		ptd.MarkListed()
 	}
 
-	tasks, err := t.manager.teamStore.ListTasks(ctx, team.ID, "priority", statusFilter, filterUserID, "", chatID, offset)
+	tasks, err := t.manager.teamStore.ListTasks(ctx, team.ID, "priority", statusFilter, filterUserID, "", listChatID, offset)
 	if err != nil {
 		return ErrorResult("failed to list tasks: " + err.Error())
 	}

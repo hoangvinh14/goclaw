@@ -107,11 +107,16 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 
 	chatID := ToolChatIDFromCtx(ctx)
 
+	// Shared workspace: scope by teamID only. Isolated (default): scope by chatID too.
+	wsChat := chatID
+	if IsSharedWorkspace(team.Settings) {
+		wsChat = ""
+	}
+
 	// Compute the team workspace directory so member agents write files to the
-	// shared team folder (teams/{teamID}/{chatID}/) instead of their own personal workspace.
-	// WorkspaceInterceptor redirects write_file/create_image to this path automatically.
+	// shared team folder instead of their own personal workspace.
 	taskMeta := make(map[string]any)
-	if teamWsDir, err := WorkspaceDir(t.manager.dataDir, team.ID, chatID); err == nil {
+	if teamWsDir, err := WorkspaceDir(t.manager.dataDir, team.ID, wsChat); err == nil {
 		taskMeta["team_workspace"] = teamWsDir
 	}
 	// Preserve original blocked_by list for blocker-result forwarding when task unblocks.
@@ -174,6 +179,8 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 	t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
 		TeamID:        team.ID.String(),
 		TaskID:        task.ID.String(),
+		TaskNumber:    task.TaskNumber,
+		Subject:       task.Subject,
 		Status:        status,
 		OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
 		UserID:        store.UserIDFromContext(ctx),
@@ -196,8 +203,12 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 				t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
 					TeamID:        team.ID.String(),
 					TaskID:        task.ID.String(),
+					TaskNumber:    task.TaskNumber,
+					Subject:       task.Subject,
 					Status:        store.TeamTaskStatusInProgress,
 					OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
+					Channel:       task.Channel,
+					ChatID:        task.ChatID,
 					Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 					ActorType:     "system",
 					ActorID:       "fallback_dispatch",

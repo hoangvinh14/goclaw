@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,18 +16,33 @@ const (
 )
 
 // WorkspaceDir returns the disk directory for a team workspace scope.
-// Pattern: {dataDir}/teams/{teamID}/{chatID}/
-// chatID is the system-derived userID (stable across WS reconnects).
+// - chatID="" → team root: {dataDir}/teams/{teamID}/         (shared mode)
+// - chatID="x" → per-chat: {dataDir}/teams/{teamID}/{chatID}/ (isolated mode)
 // Creates directory with 0750 if not exists.
 func WorkspaceDir(dataDir string, teamID uuid.UUID, chatID string) (string, error) {
-	if chatID == "" {
-		chatID = "_default"
+	dir := filepath.Join(dataDir, "teams", teamID.String())
+	if chatID != "" {
+		dir = filepath.Join(dir, chatID)
 	}
-	dir := filepath.Join(dataDir, "teams", teamID.String(), chatID)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create workspace dir: %w", err)
 	}
 	return dir, nil
+}
+
+// IsSharedWorkspace returns true if the team's workspace_scope setting is "shared".
+// Default (unset or "isolated") returns false.
+func IsSharedWorkspace(settings json.RawMessage) bool {
+	if settings == nil {
+		return false
+	}
+	var s struct {
+		WorkspaceScope string `json:"workspace_scope"`
+	}
+	if json.Unmarshal(settings, &s) != nil {
+		return false
+	}
+	return s.WorkspaceScope == "shared"
 }
 
 // blockedExtensions lists executable file types that are not allowed in team workspaces.
