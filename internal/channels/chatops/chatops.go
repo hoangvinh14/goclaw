@@ -56,6 +56,7 @@ type Channel struct {
 
 type cachedUser struct {
 	displayName string
+	username    string // Mattermost login handle (e.g. "vinhngh-runsystem.net") for @mention
 	fetchedAt   time.Time
 }
 

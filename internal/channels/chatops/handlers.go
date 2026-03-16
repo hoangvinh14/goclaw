@@ -69,8 +69,9 @@ func (c *Channel) handlePosted(event map[string]any) {
 		peerKind = "direct"
 	}
 
-	// Resolve display name
-	displayName := strings.ReplaceAll(c.resolveDisplayName(userID), "|", "_")
+	// Resolve display name and Mattermost username (for @mention)
+	displayName, mmUsername := c.resolveUser(userID)
+	displayName = strings.ReplaceAll(displayName, "|", "_")
 	compoundSenderID := fmt.Sprintf("%s|%s", userID, displayName)
 
 	// Policy check
@@ -175,6 +176,9 @@ func (c *Channel) handlePosted(event map[string]any) {
 		"is_dm":      fmt.Sprintf("%t", isDM),
 		"local_key":  localKey,
 	}
+	if mmUsername != "" {
+		metadata["mention_username"] = mmUsername
+	}
 	if replyRootID != "" {
 		metadata["message_thread_id"] = replyRootID
 	}
@@ -186,35 +190,36 @@ func (c *Channel) handlePosted(event map[string]any) {
 	}
 }
 
-// resolveDisplayName fetches and caches user display name.
-func (c *Channel) resolveDisplayName(userID string) string {
+// resolveUser fetches and caches the user's display name and Mattermost username.
+// The username is the login handle (e.g. "vinhngh-runsystem.net") used for @mentions.
+func (c *Channel) resolveUser(userID string) (displayName, username string) {
 	if v, ok := c.userCache.Load(userID); ok {
 		cu := v.(cachedUser)
 		if time.Since(cu.fetchedAt) < userCacheTTL {
-			return cu.displayName
+			return cu.displayName, cu.username
 		}
 	}
 
 	user, err := c.apiGet("/api/v4/users/" + userID)
 	if err != nil {
 		slog.Debug("chatops: failed to resolve user", "user_id", userID, "error", err)
-		return userID
+		return userID, ""
 	}
 
 	firstName, _ := user["first_name"].(string)
 	lastName, _ := user["last_name"].(string)
-	username, _ := user["username"].(string)
+	mmUsername, _ := user["username"].(string)
 
 	name := strings.TrimSpace(firstName + " " + lastName)
 	if name == "" {
-		name = username
+		name = mmUsername
 	}
 	if name == "" {
 		name = userID
 	}
 
-	c.userCache.Store(userID, cachedUser{displayName: name, fetchedAt: time.Now()})
-	return name
+	c.userCache.Store(userID, cachedUser{displayName: name, username: mmUsername, fetchedAt: time.Now()})
+	return name, mmUsername
 }
 
 // --- Policy checks (same pattern as Slack) ---

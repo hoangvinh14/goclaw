@@ -34,6 +34,14 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 		return nil
 	}
 
+	// Prepend @mention when replying in a group thread so the user
+	// receives a Mattermost notification (matching Telegram's reply_to pattern).
+	if rootID != "" && msg.Metadata["is_dm"] != "true" {
+		if mentionUser := msg.Metadata["mention_username"]; mentionUser != "" {
+			content = "@" + mentionUser + " " + content
+		}
+	}
+
 	// Handle media attachments (upload local files by path)
 	var fileIDs []string
 	for _, media := range msg.Media {
