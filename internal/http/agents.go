@@ -18,17 +18,18 @@ import (
 
 // AgentsHandler handles agent CRUD and sharing endpoints.
 type AgentsHandler struct {
-	agents   store.AgentStore
-	token    string
-	msgBus   *bus.MessageBus   // for cache invalidation events (nil = no events)
-	summoner *AgentSummoner    // LLM-based agent setup (nil = disabled)
-	isOwner  func(string) bool // checks if user ID is a system owner (nil = no owners configured)
+	agents           store.AgentStore
+	token            string
+	defaultWorkspace string            // default workspace path template (e.g. "~/.goclaw/workspace")
+	msgBus           *bus.MessageBus   // for cache invalidation events (nil = no events)
+	summoner         *AgentSummoner    // LLM-based agent setup (nil = disabled)
+	isOwner          func(string) bool // checks if user ID is a system owner (nil = no owners configured)
 }
 
 // NewAgentsHandler creates a handler for agent management endpoints.
 // isOwner is a function that checks if a user ID is in GOCLAW_OWNER_IDS (nil = disabled).
-func NewAgentsHandler(agents store.AgentStore, token string, msgBus *bus.MessageBus, summoner *AgentSummoner, isOwner func(string) bool) *AgentsHandler {
-	return &AgentsHandler{agents: agents, token: token, msgBus: msgBus, summoner: summoner, isOwner: isOwner}
+func NewAgentsHandler(agents store.AgentStore, token, defaultWorkspace string, msgBus *bus.MessageBus, summoner *AgentSummoner, isOwner func(string) bool) *AgentsHandler {
+	return &AgentsHandler{agents: agents, token: token, defaultWorkspace: defaultWorkspace, msgBus: msgBus, summoner: summoner, isOwner: isOwner}
 }
 
 // isOwnerUser checks if the given user ID is a system owner.
@@ -128,7 +129,7 @@ func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		req.MaxToolIterations = 20
 	}
 	if req.Workspace == "" {
-		req.Workspace = fmt.Sprintf("~/.goclaw/%s-workspace", req.AgentKey)
+		req.Workspace = fmt.Sprintf("%s/%s", h.defaultWorkspace, req.AgentKey)
 	}
 	req.RestrictToWorkspace = true
 
@@ -237,12 +238,12 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent changing owner_id; always enforce restrict_to_workspace
-	delete(updates, "owner_id")
-	delete(updates, "id")
-	updates["restrict_to_workspace"] = true
+	// Allowlist: only permit known agent columns to be updated.
+	// Defense-in-depth against column injection via arbitrary JSON keys.
+	allowed := filterAllowedKeys(updates, agentAllowedFields)
+	allowed["restrict_to_workspace"] = true
 
-	if err := h.agents.Update(r.Context(), id, updates); err != nil {
+	if err := h.agents.Update(r.Context(), id, allowed); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -252,7 +253,7 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	h.emitCacheInvalidate(bus.CacheKindBootstrap, id.String())
 
 	// Cascade: if status changed, broadcast so channel instances and cron jobs react.
-	if newStatus, ok := updates["status"].(string); ok && newStatus != ag.Status {
+	if newStatus, ok := allowed["status"].(string); ok && newStatus != ag.Status {
 		if h.msgBus != nil {
 			h.msgBus.Broadcast(bus.Event{
 				Name: bus.EventAgentStatusChanged,

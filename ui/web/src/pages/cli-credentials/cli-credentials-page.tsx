@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { KeyRound, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,9 @@ import { CliCredentialFormDialog } from "./cli-credential-form-dialog";
 import type { SecureCLIBinary, CLICredentialInput } from "./hooks/use-cli-credentials";
 
 export function CliCredentialsPage() {
+  const { t } = useTranslation("cli-credentials");
+  const { t: tc } = useTranslation("common");
+
   const [formOpen, setFormOpen] = useState(false);
   const [editItem, setEditItem] = useState<SecureCLIBinary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SecureCLIBinary | null>(null);
@@ -58,15 +62,15 @@ export function CliCredentialsPage() {
   return (
     <div className="p-4 sm:p-6">
       <PageHeader
-        title="CLI Credentials"
-        description="Manage secure CLI binaries available to agents with injected credentials."
+        title={t("title")}
+        description={t("description")}
         actions={
           <div className="flex gap-2">
             <Button size="sm" onClick={openCreate} className="gap-1">
-              <Plus className="h-3.5 w-3.5" /> Add Credential
+              <Plus className="h-3.5 w-3.5" /> {t("addCredential")}
             </Button>
             <Button variant="outline" size="sm" onClick={refresh} disabled={spinning} className="gap-1">
-              <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> Refresh
+              <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> {tc("refresh")}
             </Button>
           </div>
         }
@@ -78,20 +82,20 @@ export function CliCredentialsPage() {
         ) : items.length === 0 ? (
           <EmptyState
             icon={KeyRound}
-            title="No CLI credentials yet"
-            description="Add a CLI credential to allow agents to run authenticated CLI commands."
+            title={t("emptyTitle")}
+            description={t("emptyDescription")}
           />
         ) : (
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full min-w-[600px] text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-4 py-3 text-left font-medium">Binary</th>
-                  <th className="px-4 py-3 text-left font-medium">Description</th>
-                  <th className="px-4 py-3 text-left font-medium">Scope</th>
-                  <th className="px-4 py-3 text-left font-medium">Enabled</th>
-                  <th className="px-4 py-3 text-left font-medium">Timeout</th>
-                  <th className="px-4 py-3 text-right font-medium">Actions</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.binary")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{tc("description")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.scope")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{tc("enabled")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.timeout")}</th>
+                  <th className="px-4 py-3 text-right font-medium">{tc("actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -113,12 +117,12 @@ export function CliCredentialsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={item.agent_id ? "secondary" : "outline"}>
-                        {item.agent_id ? "Agent" : "Global"}
+                        {item.agent_id ? tc("agent") : tc("global")}
                       </Badge>
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={item.enabled ? "default" : "secondary"}>
-                        {item.enabled ? "Enabled" : "Disabled"}
+                        {item.enabled ? tc("enabled") : tc("disabled")}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{item.timeout_seconds}s</td>
@@ -130,7 +134,7 @@ export function CliCredentialsPage() {
                           onClick={() => openEdit(item)}
                           className="gap-1"
                         >
-                          <Pencil className="h-3.5 w-3.5" /> Edit
+                          <Pencil className="h-3.5 w-3.5" /> {tc("edit")}
                         </Button>
                         <Button
                           variant="ghost"
@@ -161,9 +165,9 @@ export function CliCredentialsPage() {
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title="Delete CLI Credential"
-        description={`Remove "${deleteTarget?.binary_name}"? Agents that depend on it will lose access.`}
-        confirmLabel="Delete"
+        title={t("delete.title")}
+        description={t("delete.description", { name: deleteTarget?.binary_name })}
+        confirmLabel={t("delete.confirm")}
         variant="destructive"
         onConfirm={handleDelete}
         loading={deleteLoading}

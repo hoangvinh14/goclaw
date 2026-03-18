@@ -10,8 +10,6 @@ import { useAgents } from "../hooks/use-agents";
 import { AgentGeneralTab } from "./agent-general-tab";
 import { AgentConfigTab } from "./agent-config-tab";
 import { AgentFilesTab } from "./agent-files-tab";
-import { AgentSharesTab } from "./agent-shares-tab";
-import { AgentLinksTab } from "./agent-links-tab";
 import { AgentSkillsTab } from "./agent-skills-tab";
 import { AgentInstancesTab } from "./agent-instances-tab";
 import { SummoningModal } from "../summoning-modal";
@@ -67,6 +65,9 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
 
   const title = agentDisplayName(agent, t("card.unnamedAgent"));
   const subtitle = agentSubtitle(agent);
+  const emoji = typeof (agent.other_config as Record<string, unknown> | null)?.emoji === "string"
+    ? (agent.other_config as Record<string, unknown>).emoji as string
+    : "";
 
   return (
     <TooltipProvider>
@@ -77,7 +78,7 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Bot className="h-6 w-6" />
+          {emoji ? <span className="text-2xl leading-none">{emoji}</span> : <Bot className="h-6 w-6" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -152,8 +153,6 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
             <TabsTrigger value="general">{t("detail.tabs.general")}</TabsTrigger>
             <TabsTrigger value="config">{t("detail.tabs.config")}</TabsTrigger>
             <TabsTrigger value="files">{t("detail.tabs.files")}</TabsTrigger>
-            <TabsTrigger value="shares">{t("detail.tabs.shares")}</TabsTrigger>
-            <TabsTrigger value="links">{t("detail.tabs.links")}</TabsTrigger>
             <TabsTrigger value="skills">{t("detail.tabs.skills")}</TabsTrigger>
             {agent.agent_type === "predefined" && (
               <TabsTrigger value="instances">{t("detail.tabs.instances")}</TabsTrigger>
@@ -177,14 +176,6 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
               onRegenerate={handleRegenerate}
               onResummon={handleResummon}
             />
-          </TabsContent>
-
-          <TabsContent value="shares" className="mt-4">
-            <AgentSharesTab agentId={agentId} />
-          </TabsContent>
-
-          <TabsContent value="links" className="mt-4">
-            <AgentLinksTab agentId={agentId} />
           </TabsContent>
 
           <TabsContent value="skills" className="mt-4">

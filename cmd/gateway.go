@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
-	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/cache"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
@@ -30,17 +29,13 @@ import (
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
-	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
-	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
 	"github.com/nextlevelbuilder/goclaw/internal/tasks"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
-	"github.com/nextlevelbuilder/goclaw/internal/tracing"
-	"github.com/nextlevelbuilder/goclaw/pkg/browser"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
@@ -84,284 +79,27 @@ func runGateway() {
 	// Detect server IPs for output scrubbing (prevents IP leaks via web_fetch, exec, etc.)
 	tools.DetectServerIPs(context.Background())
 
-	// Create tool registry with all tools
-	toolsReg := tools.NewRegistry()
-	agentCfg := cfg.ResolveAgent("default")
-
-	// Sandbox manager (optional — routes tools through Docker containers)
-	var sandboxMgr sandbox.Manager
-	if sbCfg := cfg.Agents.Defaults.Sandbox; sbCfg != nil && sbCfg.Mode != "" && sbCfg.Mode != "off" {
-		if err := sandbox.CheckDockerAvailable(context.Background()); err != nil {
-			slog.Warn("sandbox disabled: Docker not available",
-				"configured_mode", sbCfg.Mode,
-				"error", err,
-			)
-		} else {
-			resolved := sbCfg.ToSandboxConfig()
-			sandboxMgr = sandbox.NewDockerManager(resolved)
-			slog.Info("sandbox enabled", "mode", string(resolved.Mode), "image", resolved.Image, "scope", string(resolved.Scope))
-		}
-	}
-
-	// Register file tools + exec tool (with sandbox routing via FsBridge if enabled)
-	if sandboxMgr != nil {
-		toolsReg.Register(tools.NewSandboxedReadFileTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
-		toolsReg.Register(tools.NewSandboxedWriteFileTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
-		toolsReg.Register(tools.NewSandboxedListFilesTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
-		toolsReg.Register(tools.NewSandboxedEditTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
-		toolsReg.Register(tools.NewSandboxedExecTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
-	} else {
-		toolsReg.Register(tools.NewReadFileTool(workspace, agentCfg.RestrictToWorkspace))
-		toolsReg.Register(tools.NewWriteFileTool(workspace, agentCfg.RestrictToWorkspace))
-		toolsReg.Register(tools.NewListFilesTool(workspace, agentCfg.RestrictToWorkspace))
-		toolsReg.Register(tools.NewEditTool(workspace, agentCfg.RestrictToWorkspace))
-		toolsReg.Register(tools.NewExecTool(workspace, agentCfg.RestrictToWorkspace))
-	}
-
-	// Memory tools — PG-backed; always registered (PG memory is always available)
-	toolsReg.Register(tools.NewMemorySearchTool())
-	toolsReg.Register(tools.NewMemoryGetTool())
-	toolsReg.Register(tools.NewKnowledgeGraphSearchTool())
-	slog.Info("memory + knowledge graph tools registered (PG-backed)")
-
-	// Browser automation tool
-	var browserMgr *browser.Manager
-	if cfg.Tools.Browser.Enabled {
-		var opts []browser.Option
-		if cfg.Tools.Browser.RemoteURL != "" {
-			opts = append(opts, browser.WithRemoteURL(cfg.Tools.Browser.RemoteURL))
-			slog.Info("browser tool enabled", "remote", cfg.Tools.Browser.RemoteURL)
-		} else {
-			opts = append(opts, browser.WithHeadless(cfg.Tools.Browser.Headless))
-			slog.Info("browser tool enabled", "headless", cfg.Tools.Browser.Headless)
-		}
-		browserMgr = browser.New(opts...)
-		toolsReg.Register(browser.NewBrowserTool(browserMgr))
+	toolsReg, execApprovalMgr, mcpMgr, sandboxMgr, browserMgr, webFetchTool, permPE, toolPE, dataDir, agentCfg := setupToolRegistry(cfg, workspace, providerRegistry)
+	if browserMgr != nil {
 		defer browserMgr.Close()
 	}
-
-	// Web tools (web_search + web_fetch)
-	webSearchTool := tools.NewWebSearchTool(tools.WebSearchConfig{
-		BraveEnabled: cfg.Tools.Web.Brave.Enabled,
-		BraveAPIKey:  cfg.Tools.Web.Brave.APIKey,
-		DDGEnabled:   cfg.Tools.Web.DuckDuckGo.Enabled,
-	})
-	if webSearchTool != nil {
-		toolsReg.Register(webSearchTool)
-		slog.Info("web_search tool enabled")
-	}
-	webFetchTool := tools.NewWebFetchTool(tools.WebFetchConfig{
-		Policy:         cfg.Tools.WebFetch.Policy,
-		AllowedDomains: cfg.Tools.WebFetch.AllowedDomains,
-		BlockedDomains: cfg.Tools.WebFetch.BlockedDomains,
-	})
-	toolsReg.Register(webFetchTool)
-	slog.Info("web_fetch tool enabled", "policy", cfg.Tools.WebFetch.Policy, "blocked", len(cfg.Tools.WebFetch.BlockedDomains))
-
-	// Vision fallback tool (for non-vision providers like MiniMax)
-	toolsReg.Register(tools.NewReadImageTool(providerRegistry))
-	toolsReg.Register(tools.NewCreateImageTool(providerRegistry))
-
-	// Audio generation tool (MiniMax music + ElevenLabs sound effects)
-	toolsReg.Register(tools.NewCreateAudioTool(providerRegistry,
-		cfg.Tts.ElevenLabs.APIKey, cfg.Tts.ElevenLabs.BaseURL))
-
-	// TTS (text-to-speech) system
-	ttsMgr := setupTTS(cfg)
-	if ttsMgr != nil {
-		toolsReg.Register(tools.NewTtsTool(ttsMgr))
-		slog.Info("tts enabled", "provider", ttsMgr.PrimaryProvider(), "auto", string(ttsMgr.AutoMode()))
-	}
-
-	// Tool rate limiting (per session, sliding window)
-	if cfg.Tools.RateLimitPerHour > 0 {
-		toolsReg.SetRateLimiter(tools.NewToolRateLimiter(cfg.Tools.RateLimitPerHour))
-		slog.Info("tool rate limiting enabled", "per_hour", cfg.Tools.RateLimitPerHour)
-	}
-
-	// Credential scrubbing (enabled by default, can be disabled via config)
-	if cfg.Tools.ScrubCredentials != nil && !*cfg.Tools.ScrubCredentials {
-		toolsReg.SetScrubbing(false)
-		slog.Info("credential scrubbing disabled")
-	}
-
-	// MCP servers (config-based: shared across all agents)
-	var mcpMgr *mcpbridge.Manager
-	if len(cfg.Tools.McpServers) > 0 {
-		mcpMgr = mcpbridge.NewManager(toolsReg, mcpbridge.WithConfigs(cfg.Tools.McpServers))
-		if err := mcpMgr.Start(context.Background()); err != nil {
-			slog.Warn("mcp.startup_errors", "error", err)
-		}
+	if mcpMgr != nil {
 		defer mcpMgr.Stop()
-		slog.Info("MCP servers initialized", "configured", len(cfg.Tools.McpServers), "tools", len(mcpMgr.ToolNames()))
 	}
 
-	// Exec approval system — always active (deny patterns + safe bins + configurable ask mode)
-	var execApprovalMgr *tools.ExecApprovalManager
-	{
-		approvalCfg := tools.DefaultExecApprovalConfig()
-		// Override from user config (backward compat: explicit values take precedence)
-		if eaCfg := cfg.Tools.ExecApproval; eaCfg.Security != "" {
-			approvalCfg.Security = tools.ExecSecurity(eaCfg.Security)
-		}
-		if eaCfg := cfg.Tools.ExecApproval; eaCfg.Ask != "" {
-			approvalCfg.Ask = tools.ExecAskMode(eaCfg.Ask)
-		}
-		if len(cfg.Tools.ExecApproval.Allowlist) > 0 {
-			approvalCfg.Allowlist = cfg.Tools.ExecApproval.Allowlist
-		}
-		execApprovalMgr = tools.NewExecApprovalManager(approvalCfg)
-
-		// Wire approval to exec tools in the registry
-		if execTool, ok := toolsReg.Get("exec"); ok {
-			if aa, ok := execTool.(tools.ApprovalAware); ok {
-				aa.SetApprovalManager(execApprovalMgr, "default")
-			}
-		}
-		slog.Info("exec approval enabled", "security", string(approvalCfg.Security), "ask", string(approvalCfg.Ask))
-	}
-
-	// --- Enforcement: Policy engines ---
-
-	// Permission policy engine (role-based RPC access control)
-	permPE := permissions.NewPolicyEngine(cfg.Gateway.OwnerIDs)
-
-	// Tool policy engine (7-step tool filtering pipeline)
-	toolPE := tools.NewPolicyEngine(&cfg.Tools)
-
-	// Data directory for Phase 2 services
-	dataDir := os.Getenv("GOCLAW_DATA_DIR")
-	if dataDir == "" {
-		dataDir = config.ExpandHome("~/.goclaw/data")
-	}
-	os.MkdirAll(dataDir, 0755)
-
-	// Block exec from accessing sensitive directories (data dir, .goclaw, config file).
-	// Prevents `cp /app/data/config.json workspace/` and similar exfiltration.
-	// Exception: .goclaw/skills-store/ is allowed (skills may contain executable scripts).
-	if execTool, ok := toolsReg.Get("exec"); ok {
-		if et, ok := execTool.(*tools.ExecTool); ok {
-			et.DenyPaths(dataDir, ".goclaw/")
-			et.AllowPathExemptions(".goclaw/skills-store/")
-			if cfgPath := os.Getenv("GOCLAW_CONFIG"); cfgPath != "" {
-				et.DenyPaths(cfgPath)
-			}
-		}
-	}
-
-	// Block filesystem tools from accessing internal system files within the workspace.
-	// Shared-workspace agents have workspace = dataDir root, exposing config.json,
-	// memory.db, .media/, delegate/ etc. via list_files/read_file.
-	// Non-shared agents are already isolated by resolvePath boundary check, but
-	// deny paths add defense-in-depth.
-	internalDenyPaths := []string{
-		"config.json", "memory.db", "memory.db-wal", "memory.db-shm",
-		"memory/", ".media/", "delegate/",
-	}
-	if rf, ok := toolsReg.Get("read_file"); ok {
-		if t, ok := rf.(*tools.ReadFileTool); ok {
-			t.DenyPaths(internalDenyPaths...)
-		}
-	}
-	if wf, ok := toolsReg.Get("write_file"); ok {
-		if t, ok := wf.(*tools.WriteFileTool); ok {
-			t.DenyPaths(internalDenyPaths...)
-		}
-	}
-	if lf, ok := toolsReg.Get("list_files"); ok {
-		if t, ok := lf.(*tools.ListFilesTool); ok {
-			t.DenyPaths(internalDenyPaths...)
-		}
-	}
-	if ed, ok := toolsReg.Get("edit"); ok {
-		if t, ok := ed.(*tools.EditTool); ok {
-			t.DenyPaths(internalDenyPaths...)
-		}
-	}
-
-	// --- Store creation (Postgres) ---
-	if cfg.Database.PostgresDSN == "" {
-		slog.Error("GOCLAW_POSTGRES_DSN is required. Set it in your environment or .env.local file.")
-		os.Exit(1)
-	}
-
-	var traceCollector *tracing.Collector
-
-	// Schema compatibility check: ensure DB schema matches this binary.
-	if err := checkSchemaOrAutoUpgrade(cfg.Database.PostgresDSN); err != nil {
-		slog.Error("schema compatibility check failed", "error", err)
-		os.Exit(1)
-	}
-
-	storeCfg := store.StoreConfig{
-		PostgresDSN:   cfg.Database.PostgresDSN,
-		EncryptionKey: os.Getenv("GOCLAW_ENCRYPTION_KEY"),
-	}
-	pgStores, pgErr := pg.NewPGStores(storeCfg)
-	if pgErr != nil {
-		slog.Error("failed to create PG stores", "error", pgErr)
-		os.Exit(1)
-	}
-	if pgStores.Tracing != nil {
-		traceCollector = tracing.NewCollector(pgStores.Tracing)
-		traceCollector.OnFlush = func(traceIDs []uuid.UUID) {
-			ids := make([]string, len(traceIDs))
-			for i, id := range traceIDs {
-				ids[i] = id.String()
-			}
-			msgBus.Broadcast(bus.Event{
-				Name:    protocol.EventTraceUpdated,
-				Payload: map[string]any{"trace_ids": ids},
-			})
-		}
-		traceCollector.Start()
-		slog.Info("LLM tracing enabled")
-	}
+	pgStores, traceCollector, snapshotWorker := setupStoresAndTracing(cfg, dataDir, msgBus)
 	if traceCollector != nil {
 		defer traceCollector.Stop()
 		// OTel OTLP export: compiled via build tags. Build with 'go build -tags otel' to enable.
 		initOTelExporter(context.Background(), cfg, traceCollector)
 	}
-
-	// Start snapshot worker for hourly usage aggregation
-	if pgStores.Snapshots != nil {
-		snapshotWorker := tracing.NewSnapshotWorker(pgStores.DB, pgStores.Snapshots)
-		snapshotWorker.Start()
+	if snapshotWorker != nil {
 		defer snapshotWorker.Stop()
-
-		// Backfill historical data in background
-		go func() {
-			count, err := snapshotWorker.Backfill(context.Background())
-			if err != nil {
-				slog.Warn("snapshot backfill failed", "error", err)
-			} else if count > 0 {
-				slog.Info("snapshot backfill complete", "hours", count)
-			}
-		}()
 	}
 
 	// Redis cache: compiled via build tags. Build with 'go build -tags redis' to enable.
 	redisClient := initRedisClient(cfg)
 	defer shutdownRedis(redisClient)
-
-	// Wire cron config from config.json
-	cronRetryCfg := cfg.Cron.ToRetryConfig()
-	// Apply retry config via type assertion on the concrete cron store.
-	pgStores.Cron.SetOnJob(nil) // ensure initialized; actual handler set below
-	_ = cronRetryCfg            // config available; pg cron store reads it internally
-	if cfg.Cron.DefaultTimezone != "" {
-		pgStores.Cron.SetDefaultTimezone(cfg.Cron.DefaultTimezone)
-	}
-
-	// Load secrets from config_secrets table before env overrides.
-	// Precedence: config.json → DB secrets → env vars (highest).
-	if pgStores.ConfigSecrets != nil {
-		if secrets, err := pgStores.ConfigSecrets.GetAll(context.Background()); err == nil && len(secrets) > 0 {
-			cfg.ApplyDBSecrets(secrets)
-			cfg.ApplyEnvOverrides()
-			slog.Info("config secrets loaded from DB", "count", len(secrets))
-		}
-	}
 
 	// Register providers from DB (overrides config providers).
 	if pgStores.Providers != nil {
@@ -369,91 +107,9 @@ func runGateway() {
 		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP)
 	}
 
-	// Wire embedding provider to PGMemoryStore so IndexDocument generates vectors.
-	// Per-agent DB config takes priority over config file defaults.
-	if pgStores.Memory != nil {
-		memCfg := cfg.Agents.Defaults.Memory
-		if pgStores.Agents != nil {
-			if defaultAgent, agErr := pgStores.Agents.GetByKey(context.Background(), "default"); agErr == nil {
-				if agentMemCfg := defaultAgent.ParseMemoryConfig(); agentMemCfg != nil {
-					memCfg = agentMemCfg
-					slog.Debug("using per-agent memory config from DB", "agent", defaultAgent.AgentKey)
-				}
-			}
-		}
-		if embProvider := resolveEmbeddingProvider(cfg, memCfg, providerRegistry); embProvider != nil {
-			pgStores.Memory.SetEmbeddingProvider(embProvider)
-			slog.Info("memory embeddings enabled", "provider", embProvider.Name(), "model", embProvider.Model())
+	setupMemoryEmbeddings(cfg, pgStores, providerRegistry)
 
-			// Backfill embeddings for existing chunks that were stored without vectors.
-			type backfiller interface {
-				BackfillEmbeddings(ctx context.Context) (int, error)
-			}
-			if bf, ok := pgStores.Memory.(backfiller); ok {
-				go func() {
-					bgCtx := context.Background()
-					count, err := bf.BackfillEmbeddings(bgCtx)
-					if err != nil {
-						slog.Warn("memory embeddings backfill failed", "error", err)
-					} else if count > 0 {
-						slog.Info("memory embeddings backfill complete", "chunks_updated", count)
-					}
-				}()
-			}
-		} else {
-			slog.Warn("memory embeddings disabled (no API key), chunks stored without vectors")
-		}
-	}
-
-	// Load bootstrap files for default agent's system prompt from DB.
-	// Seeds if empty; falls back to filesystem as last resort.
-	var contextFiles []bootstrap.ContextFile
-
-	if pgStores.Agents != nil {
-		bgCtx := context.Background()
-		defaultAgent, agErr := pgStores.Agents.GetByKey(bgCtx, "default")
-		if agErr == nil {
-			dbFiles := bootstrap.LoadFromStore(bgCtx, pgStores.Agents, defaultAgent.ID)
-			if len(dbFiles) > 0 {
-				contextFiles = dbFiles
-				slog.Info("bootstrap loaded from store", "count", len(dbFiles))
-			} else {
-				// DB empty → seed templates, then load
-				if _, seedErr := bootstrap.SeedToStore(bgCtx, pgStores.Agents, defaultAgent.ID, defaultAgent.AgentType); seedErr != nil {
-					slog.Warn("failed to seed bootstrap to store", "error", seedErr)
-				} else {
-					contextFiles = bootstrap.LoadFromStore(bgCtx, pgStores.Agents, defaultAgent.ID)
-					slog.Info("bootstrap seeded and loaded from store", "count", len(contextFiles))
-				}
-			}
-		}
-	}
-
-	if len(contextFiles) == 0 {
-		// DB fallback: load from workspace filesystem
-		rawFiles := bootstrap.LoadWorkspaceFiles(workspace)
-		truncCfg := bootstrap.TruncateConfig{
-			MaxCharsPerFile: agentCfg.BootstrapMaxChars,
-			TotalMaxChars:   agentCfg.BootstrapTotalMaxChars,
-		}
-		if truncCfg.MaxCharsPerFile <= 0 {
-			truncCfg.MaxCharsPerFile = bootstrap.DefaultMaxCharsPerFile
-		}
-		if truncCfg.TotalMaxChars <= 0 {
-			truncCfg.TotalMaxChars = bootstrap.DefaultTotalMaxChars
-		}
-		contextFiles = bootstrap.BuildContextFiles(rawFiles, truncCfg)
-		slog.Info("bootstrap loaded from filesystem", "count", len(contextFiles))
-	}
-
-	// Debug: log bootstrap file loading results
-	{
-		var loadedNames []string
-		for _, cf := range contextFiles {
-			loadedNames = append(loadedNames, fmt.Sprintf("%s(%d)", cf.Path, len(cf.Content)))
-		}
-		slog.Info("bootstrap context files", "count", len(contextFiles), "files", loadedNames)
-	}
+	loadBootstrapFiles(pgStores, workspace, agentCfg)
 
 	// Subagent system
 	subagentMgr := setupSubagents(providerRegistry, cfg, msgBus, toolsReg, workspace, sandboxMgr)
@@ -507,99 +163,11 @@ func runGateway() {
 		slog.Info("subagent system enabled", "tools", []string{"spawn"})
 	}
 
-	// Skills loader + search tool
-	// Global skills live under ~/.goclaw/skills/ (user-managed), not data/skills/.
-	globalSkillsDir := os.Getenv("GOCLAW_SKILLS_DIR")
-	if globalSkillsDir == "" {
-		globalSkillsDir = filepath.Join(config.ExpandHome("~/.goclaw"), "skills")
-	}
-	// Bundled skills: shipped with the Docker image at /app/bundled-skills/.
-	// Lowest priority — managed (skills-store) and user-uploaded skills override these.
-	builtinSkillsDir := os.Getenv("GOCLAW_BUILTIN_SKILLS_DIR")
-	if builtinSkillsDir == "" {
-		builtinSkillsDir = "/app/bundled-skills"
-	}
-	skillsLoader := skills.NewLoader(workspace, globalSkillsDir, builtinSkillsDir)
-	skillSearchTool := tools.NewSkillSearchTool(skillsLoader)
-	toolsReg.Register(skillSearchTool)
-	toolsReg.Register(tools.NewUseSkillTool())
-	slog.Info("skill_search tool registered", "skills", len(skillsLoader.ListSkills()))
+	skillsLoader, skillSearchTool, globalSkillsDir := setupSkillsSystem(cfg, workspace, dataDir, pgStores, toolsReg, providerRegistry, msgBus)
+	_ = skillSearchTool // used via wireExtras → skillsLoader; kept for type clarity
 
-	// Wire skills-store directory into filesystem loader so agents
-	// can discover uploaded skills in their system prompt and BM25 search index.
-	if pgStores.Skills != nil {
-		storeDirs := pgStores.Skills.Dirs()
-		if len(storeDirs) > 0 {
-			skillsLoader.SetManagedDir(storeDirs[0])
-			slog.Info("skills-store directory wired into loader", "dir", storeDirs[0])
-
-			// Seed system/bundled skills into DB
-			bundledSkillsDir := os.Getenv("GOCLAW_BUNDLED_SKILLS_DIR")
-			if bundledSkillsDir == "" {
-				// Check common locations: Docker default, then local dev
-				for _, candidate := range []string{"bundled-skills", "/app/bundled-skills", "skills"} {
-					if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-						bundledSkillsDir = candidate
-						break
-					}
-				}
-			}
-			if bundledSkillsDir != "" {
-				if pgSkills, ok := pgStores.Skills.(*pg.PGSkillStore); ok {
-					seeder := skills.NewSeeder(bundledSkillsDir, storeDirs[0], pgSkills)
-					seeded, skipped, seededSkills, err := seeder.Seed(context.Background())
-					if err != nil {
-						slog.Warn("system skills seed failed", "error", err)
-					} else {
-						if seeded > 0 {
-							slog.Info("system skills seeded", "seeded", seeded, "skipped", skipped)
-						}
-						// Check dependencies asynchronously — does not block startup.
-						// Emits WS events per-skill so UI updates in realtime.
-						if len(seededSkills) > 0 {
-							seeder.CheckDepsAsync(seededSkills, msgBus)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Publish skill tool — lets agents register created skills in the database
-	if pgStores.Skills != nil {
-		if pgSkills, ok := pgStores.Skills.(*pg.PGSkillStore); ok {
-			storeDirs := pgStores.Skills.Dirs()
-			if len(storeDirs) > 0 {
-				toolsReg.Register(tools.NewPublishSkillTool(pgSkills, storeDirs[0], skillsLoader))
-				slog.Info("publish_skill tool registered")
-			}
-		}
-	}
-
-	// Wire embedding-based skill search + per-agent access filtering
-	if pgStores.Skills != nil {
-		if sas, ok := pgStores.Skills.(store.SkillAccessStore); ok {
-			skillSearchTool.SetSkillAccessStore(sas)
-		}
-		if pgSkills, ok := pgStores.Skills.(*pg.PGSkillStore); ok {
-			memCfg := cfg.Agents.Defaults.Memory
-			if embProvider := resolveEmbeddingProvider(cfg, memCfg, providerRegistry); embProvider != nil {
-				pgSkills.SetEmbeddingProvider(embProvider)
-				skillSearchTool.SetEmbeddingSearcher(pgSkills, embProvider)
-				slog.Info("skill embeddings enabled", "provider", embProvider.Name())
-
-				// Backfill embeddings for existing skills
-				go func() {
-					count, err := pgSkills.BackfillSkillEmbeddings(context.Background())
-					if err != nil {
-						slog.Warn("skill embeddings backfill failed", "error", err)
-					} else if count > 0 {
-						slog.Info("skill embeddings backfill complete", "skills_updated", count)
-					}
-				}()
-			}
-		}
-	}
+	// DateTime tool (precise time for cron scheduling, memory timestamps, etc.)
+	toolsReg.Register(tools.NewDateTimeTool())
 
 	// Cron tool (agent-facing, matching TS cron-tool.ts)
 	toolsReg.Register(tools.NewCronTool(pgStores.Cron))
@@ -638,16 +206,16 @@ func runGateway() {
 	slog.Info("tool aliases registered", "count", len(toolsReg.Aliases()))
 
 	// Allow read_file to access skills directories and CLI workspaces (outside workspace).
-	// Skills can live in ~/.goclaw/skills/, ~/.agents/skills/, ~/.goclaw/skills-store/, etc.
-	// CLI workspaces live in ~/.goclaw/cli-workspaces/ (agent working files).
+	// Skills can live under dataDir/skills/, ~/.agents/skills/, dataDir/skills-store/, etc.
+	// CLI workspaces live in dataDir/cli-workspaces/ (agent working files).
 	homeDir, _ := os.UserHomeDir()
 	if readTool, ok := toolsReg.Get("read_file"); ok {
 		if pa, ok := readTool.(tools.PathAllowable); ok {
 			pa.AllowPaths(globalSkillsDir)
 			if homeDir != "" {
 				pa.AllowPaths(filepath.Join(homeDir, ".agents", "skills"))
-				pa.AllowPaths(filepath.Join(homeDir, ".goclaw", "cli-workspaces"))
 			}
+			pa.AllowPaths(filepath.Join(dataDir, "cli-workspaces"))
 			// Also allow the skills store directory (uploaded skill content).
 			if pgStores.Skills != nil {
 				pa.AllowPaths(pgStores.Skills.Dirs()...)
@@ -694,7 +262,6 @@ func runGateway() {
 	// for immediate cache invalidation on agents.files.set.
 	var contextFileInterceptor *tools.ContextFileInterceptor
 
-
 	// Set agent store for tools_invoke context injection + wire extras
 	if pgStores.Agents != nil {
 		server.SetAgentStore(pgStores.Agents)
@@ -721,7 +288,7 @@ func runGateway() {
 	if mcpMgr != nil {
 		mcpToolLister = mcpMgr
 	}
-	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH, teamEventsH, secureCLIH := wireHTTP(pgStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
+	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH, teamEventsH, secureCLIH := wireHTTP(pgStores, cfg.Gateway.Token, cfg.Agents.Defaults.Workspace, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
 	if agentsH != nil {
 		server.SetAgentsHandler(agentsH)
 	}
@@ -778,6 +345,9 @@ func runGateway() {
 		server.SetUsageHandler(httpapi.NewUsageHandler(pgStores.Snapshots, pgStores.DB, cfg.Gateway.Token))
 	}
 
+	// Runtime package management (install/uninstall system/pip/npm packages)
+	server.SetPackagesHandler(httpapi.NewPackagesHandler(cfg.Gateway.Token))
+
 	// API key management
 	// API documentation (OpenAPI spec + Swagger UI at /docs)
 	server.SetDocsHandler(httpapi.NewDocsHandler(cfg.Gateway.Token))
@@ -786,6 +356,11 @@ func runGateway() {
 		server.SetAPIKeysHandler(httpapi.NewAPIKeysHandler(pgStores.APIKeys, cfg.Gateway.Token, msgBus))
 		server.SetAPIKeyStore(pgStores.APIKeys)
 		httpapi.InitAPIKeyCache(pgStores.APIKeys, msgBus)
+	}
+
+	// Allow browser-paired users to access HTTP APIs
+	if pgStores.Pairing != nil {
+		httpapi.InitPairingAuth(pgStores.Pairing)
 	}
 
 	// Memory management API (wired directly, only needs MemoryStore + token)
@@ -940,6 +515,151 @@ func runGateway() {
 		slog.Info("team task event subscriber registered")
 	}
 
+	// Team progress notification subscriber — forwards task events to chat channels.
+	// Reads team.settings.notifications config; direct mode sends outbound, leader mode
+	// injects into leader agent session. Notifications are batched per chat
+	// with 2s debounce to avoid spamming users when multiple tasks dispatch at once.
+	if pgStores.Teams != nil {
+		notifyTeamStore := pgStores.Teams
+		notifyAgentStore := pgStores.Agents
+		teamNotifyQueue := tools.NewTeamNotifyQueue(2000, func(items []string, meta tools.NotifyRoutingMeta) {
+			content := tools.FormatBatchedNotify(items)
+			if meta.Mode == "leader" {
+				leaderContent := fmt.Sprintf("[Auto-status — relay to user, NO task actions]\n%s\n\nBriefly inform the user. Do NOT create, retry, reassign, or modify any tasks.", content)
+				msgBus.TryPublishInbound(bus.InboundMessage{
+					Channel:  meta.Channel,
+					SenderID: "notification:progress",
+					ChatID:   meta.ChatID,
+					AgentID:  meta.LeadAgent,
+					UserID:   meta.UserID,
+					Content:  leaderContent,
+				})
+			} else {
+				msgBus.PublishOutbound(bus.OutboundMessage{
+					Channel: meta.Channel,
+					ChatID:  meta.ChatID,
+					Content: content,
+				})
+			}
+		})
+		msgBus.Subscribe("consumer.team-notify", func(evt bus.Event) {
+			payload, ok := evt.Payload.(protocol.TeamTaskEventPayload)
+			if !ok || payload.TeamID == "" || payload.Channel == "" {
+				return
+			}
+			var notifyType string
+			switch evt.Name {
+			case protocol.EventTeamTaskDispatched:
+				notifyType = "dispatched"
+			case protocol.EventTeamTaskAssigned:
+				notifyType = "dispatched" // same config flag — human assign also notifies
+			case protocol.EventTeamTaskFailed:
+				notifyType = "failed"
+			case protocol.EventTeamTaskProgress:
+				notifyType = "progress"
+			case protocol.EventTeamTaskCompleted:
+				notifyType = "completed"
+			default:
+				return
+			}
+
+			teamUUID, err := uuid.Parse(payload.TeamID)
+			if err != nil {
+				return
+			}
+			team, err := notifyTeamStore.GetTeam(context.Background(), teamUUID)
+			if err != nil || team == nil {
+				return
+			}
+			cfg := tools.ParseTeamNotifyConfig(team.Settings)
+
+			// Check if this notification type is enabled.
+			switch notifyType {
+			case "dispatched":
+				if !cfg.Dispatched {
+					return
+				}
+			case "failed":
+				if !cfg.Failed {
+					return
+				}
+			case "progress":
+				if !cfg.Progress {
+					return
+				}
+			case "completed":
+				if !cfg.Completed {
+					return
+				}
+			}
+
+			// Skip internal channels.
+			if payload.Channel == tools.ChannelSystem || payload.Channel == tools.ChannelTeammate {
+				return
+			}
+
+			// Resolve lead agent key (needed for leader mode routing + completed-by-leader skip).
+			var leadAgentKey string
+			if notifyAgentStore != nil {
+				if la, err := notifyAgentStore.GetByID(context.Background(), team.LeadAgentID); err == nil {
+					leadAgentKey = la.AgentKey
+				}
+			}
+
+			// Skip completed notification if task was completed by the leader
+			// (leader is already talking to the user, notification would be redundant).
+			if notifyType == "completed" && payload.OwnerAgentKey == leadAgentKey {
+				return
+			}
+
+			// Build notification message.
+			var content string
+			agentName := payload.OwnerAgentKey
+			if payload.OwnerDisplayName != "" {
+				agentName = payload.OwnerDisplayName
+			}
+			switch evt.Name {
+			case protocol.EventTeamTaskDispatched:
+				if payload.ActorID == "dispatch_unblocked" {
+					content = fmt.Sprintf("▶️ Task #%d \"%s\" → unblocked, dispatched to %s", payload.TaskNumber, payload.Subject, agentName)
+				} else {
+					content = fmt.Sprintf("📋 Task #%d \"%s\" → dispatched to %s", payload.TaskNumber, payload.Subject, agentName)
+				}
+			case protocol.EventTeamTaskAssigned:
+				content = fmt.Sprintf("📋 Task #%d \"%s\" → assigned to %s", payload.TaskNumber, payload.Subject, agentName)
+			case protocol.EventTeamTaskCompleted:
+				content = fmt.Sprintf("✅ Task #%d \"%s\" completed", payload.TaskNumber, payload.Subject)
+			case protocol.EventTeamTaskProgress:
+				if payload.ProgressStep != "" {
+					content = fmt.Sprintf("⏳ Task #%d \"%s\": %d%% — %s", payload.TaskNumber, payload.Subject, payload.ProgressPercent, payload.ProgressStep)
+				} else {
+					content = fmt.Sprintf("⏳ Task #%d \"%s\": %d%%", payload.TaskNumber, payload.Subject, payload.ProgressPercent)
+				}
+			case protocol.EventTeamTaskFailed:
+				reason := payload.Reason
+				if len(reason) > 200 {
+					reason = reason[:200] + "..."
+				}
+				content = fmt.Sprintf("❌ Task #%d \"%s\" failed: %s", payload.TaskNumber, payload.Subject, reason)
+			}
+
+			// In leader mode, require resolved agent key for routing.
+			if cfg.Mode == "leader" && leadAgentKey == "" {
+				return
+			}
+
+			batchKey := payload.TeamID + ":" + payload.ChatID
+			teamNotifyQueue.Enqueue(batchKey, content, tools.NotifyRoutingMeta{
+				Mode:      cfg.Mode,
+				Channel:   payload.Channel,
+				ChatID:    payload.ChatID,
+				UserID:    payload.UserID,
+				LeadAgent: leadAgentKey,
+			})
+		})
+		slog.Info("team progress notification subscriber registered")
+	}
+
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1025,7 +745,7 @@ func runGateway() {
 				agentRouter.UpdateActivity(sessionKey, agentEvent.RunID, phase, tool, iteration)
 			}
 
-			}
+		}
 
 		// Clear activity on terminal events
 		if agentEvent.Type == protocol.AgentEventRunCompleted || agentEvent.Type == protocol.AgentEventRunFailed {
@@ -1195,6 +915,8 @@ func teamTaskEventType(eventName string) string {
 		return "claimed"
 	case protocol.EventTeamTaskAssigned:
 		return "assigned"
+	case protocol.EventTeamTaskDispatched:
+		return "dispatched"
 	case protocol.EventTeamTaskCompleted:
 		return "completed"
 	case protocol.EventTeamTaskFailed:

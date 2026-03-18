@@ -64,6 +64,7 @@ CRITICAL CONSTRAINTS:
 - message is required for add action
 - schedule is required for add action
 - Default: jobs run as isolated agent turns with the specified message
+- Before creating or updating a scheduled job, call the datetime tool first to get the precise current time and unix_ms timestamp. Do NOT guess or estimate timestamps.
 
 Use jobId as the canonical identifier; id is accepted for compatibility.`
 }
@@ -236,7 +237,7 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]any, agentID, 
 	if !deliver {
 		if ctxChannel := ToolChannelFromCtx(ctx); ctxChannel != "" {
 			switch ctxChannel {
-			case "cli", "system", "subagent", "cron", "delegate":
+			case "cli", "system", "subagent", "cron", "teammate":
 				// internal channels — don't auto-deliver
 			default:
 				deliver = true
@@ -308,6 +309,13 @@ func (t *CronTool) handleUpdate(args map[string]any, agentID, userID string) *Re
 	// Re-marshal and unmarshal to leverage JSON tags
 	patchJSON, _ := json.Marshal(patchObj)
 	json.Unmarshal(patchJSON, &patch)
+
+	// Validate atMs not in the past when updating schedule
+	if patch.Schedule != nil && patch.Schedule.Kind == "at" && patch.Schedule.AtMS != nil {
+		if *patch.Schedule.AtMS <= time.Now().UnixMilli() {
+			return ErrorResult(fmt.Sprintf("schedule.atMs is in the past (%d). Use the datetime tool to get current time, then set a future timestamp. Current time is %d ms", *patch.Schedule.AtMS, time.Now().UnixMilli()))
+		}
+	}
 
 	job, err := t.cronStore.UpdateJob(jobID, patch)
 	if err != nil {

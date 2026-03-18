@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -88,7 +87,7 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 	}
 
 	if cfg.Providers.DashScope.APIKey != "" {
-		registry.Register(providers.NewDashScopeProvider(cfg.Providers.DashScope.APIKey, cfg.Providers.DashScope.APIBase, "qwen3-max"))
+		registry.Register(providers.NewDashScopeProvider("dashscope", cfg.Providers.DashScope.APIKey, cfg.Providers.DashScope.APIBase, "qwen3-max"))
 		slog.Info("registered provider", "name", "dashscope")
 	}
 
@@ -296,7 +295,7 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			registry.Register(providers.NewAnthropicProvider(p.APIKey,
 				providers.WithAnthropicBaseURL(p.APIBase)))
 		case store.ProviderDashScope:
-			registry.Register(providers.NewDashScopeProvider(p.APIKey, p.APIBase, ""))
+			registry.Register(providers.NewDashScopeProvider(p.Name, p.APIKey, p.APIBase, ""))
 		case store.ProviderBailian:
 			base := p.APIBase
 			if base == "" {
@@ -367,7 +366,7 @@ func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig) {
 		opts = append(opts, providers.WithACPPermMode(cfg.PermMode))
 	}
 	registry.Register(providers.NewACPProvider(
-		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns, opts...,
+		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
 	slog.Info("registered provider", "name", "acp", "binary", cfg.Binary)
 }
@@ -410,7 +409,7 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
 		workDir = defaultACPWorkDir()
 	}
 	registry.Register(providers.NewACPProvider(
-		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns,
+		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns(),
 		providers.WithACPModel(p.Name),
 	))
 	slog.Info("registered provider from DB", "name", p.Name, "type", "acp")
@@ -418,9 +417,5 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
 
 // defaultACPWorkDir returns the default workspace directory for ACP agents.
 func defaultACPWorkDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "goclaw-acp-workspaces")
-	}
-	return filepath.Join(home, ".goclaw", "acp-workspaces")
+	return filepath.Join(config.ResolvedDataDirFromEnv(), "acp-workspaces")
 }

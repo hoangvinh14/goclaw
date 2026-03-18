@@ -31,14 +31,14 @@ flowchart TD
 
 The input guard scans for 6 injection patterns.
 
-| Pattern | Detection Target |
-|---------|-----------------|
-| `ignore_instructions` | "ignore all previous instructions" |
-| `role_override` | "you are now...", "pretend you are..." |
-| `system_tags` | `<system>`, `[SYSTEM]`, `[INST]`, `<<SYS>>` |
-| `instruction_injection` | "new instructions:", "override:", "system prompt:" |
-| `null_bytes` | Null characters `\x00` (obfuscation attempts) |
-| `delimiter_escape` | "end of system", `</instructions>`, `</prompt>` |
+| Pattern | Detection Target | Regex Match |
+|---------|-----------------|--------------|
+| `ignore_instructions` | "ignore all previous instructions" | Case-insensitive: ignore + (all?)previous/prior/above/earlier/preceding + instructions/rules/prompts/directives/guidelines |
+| `role_override` | "you are now...", "pretend you are..." | Case-insensitive: (you are now\|from now on you are\|pretend you are\|act as if you are\|imagine you are) |
+| `system_tags` | `<system>`, `[SYSTEM]`, `[INST]`, `<<SYS>>` | Case-insensitive: `</?system>`, `[SYSTEM]`, `[INST]`, `<<SYS>>`, `<\|im_start\|>system` |
+| `instruction_injection` | "new instructions:", "override:", "system prompt:" | Case-insensitive: (new instructions?\|override\|system prompt\|<\|system\|>) |
+| `null_bytes` | Null characters `\x00` (obfuscation attempts) | Raw `\x00` byte detection |
+| `delimiter_escape` | "end of system", "begin user input", `</instructions>`, `</prompt>` | Case-insensitive: (end of system\|begin user input\|`</?instructions?>`\|`</rules>`\|`</prompt>`\|`</context>`) |
 
 **Configurable action** (`gateway.injection_action`):
 
@@ -53,7 +53,7 @@ The input guard scans for 6 injection patterns.
 
 ### Layer 3: Tool Security
 
-**Shell deny patterns** -- 7 categories of blocked commands:
+**Shell deny patterns** -- 7 categories of blocked commands (see `internal/tools/shell.go`):
 
 | Category | Examples |
 |----------|----------|
@@ -64,6 +64,8 @@ The input guard scans for 6 injection patterns.
 | Remote code execution | `curl \| sh`, `wget -O - \| sh` |
 | Reverse shells | `/dev/tcp/`, `nc -e` |
 | Eval injection | `eval $()`, `base64 -d \| sh` |
+
+Commands are scanned at execution time via regex deny lists. Patterns can be configured per-binary via `exec_settings.deny_patterns` (default set hardened for destructive/exfil operations). Verbose flag blocking (deny_verbose list) prevents leakage of sensitive output.
 
 **SSRF protection** -- 3-step validation:
 
@@ -113,8 +115,9 @@ All four filesystem tools (`read_file`, `write_file`, `list_files`, `edit`) impl
 
 | Mechanism | Detail |
 |-----------|--------|
-| Credential scrubbing | Static regex detection of: OpenAI (`sk-...`), Anthropic (`sk-ant-...`), GitHub (`ghp_/gho_/ghu_/ghs_/ghr_`), AWS (`AKIA...`), generic key-value patterns, connection strings (`postgres://`, `mysql://`), env var patterns (`KEY=`, `SECRET=`, `DSN=`), long hex strings (64+ chars). All replaced with `[REDACTED]`. |
-| Dynamic credential scrubbing | Runtime-registered values (e.g., server IPs) scrubbed alongside static patterns via `AddDynamicScrubValues()` |
+| Static credential scrubbing | Regex patterns detect: OpenAI (`sk-[a-zA-Z0-9]{20,}`), Anthropic (`sk-ant-[a-zA-Z0-9-]{20,}`), GitHub tokens (`ghp_/gho_/ghu_/ghs_/ghr_` + 36 chars), AWS (`AKIA[A-Z0-9]{16}`), generic patterns (API/token/secret/password/bearer/authorization + 8+ chars), connection strings (postgres/mysql/mongodb/redis/amqp URLs), env vars (KEY/SECRET/CREDENTIAL/PRIVATE + 8+ chars, DSN/DATABASE_URL/REDIS_URL/MONGO_URI), VIRTUAL_* vars (4+ chars), long hex strings (64+ chars). All replaced with `[REDACTED]`. |
+| Dynamic credential scrubbing | Runtime-registered credential values (min 6 chars) scrubbed via `AddCredentialScrubValues()` and replaced with `[REDACTED]` |
+| Dynamic value scrubbing (SSRF) | Server IPs and other runtime-discovered values registered via `AddDynamicScrubValues()` and replaced with `[SERVER_IP]` |
 | Web content wrapping | Fetched content wrapped in `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` tags with security warning |
 
 ### Layer 5: Isolation
@@ -127,6 +130,15 @@ All four filesystem tools (`read_file`, `write_file`, `list_files`, `edit`) impl
 | Per-user | Each user gets a subdirectory within the agent workspace | `{agent-workspace}/user_{sanitized_id}/` |
 
 The workspace is injected into tools via `WithToolWorkspace(ctx)` context injection. Tools read the workspace from context at execution time (fallback to the struct field for backward compatibility). User IDs are sanitized: anything outside `[a-zA-Z0-9_-]` becomes an underscore (`group:telegram:-1001234` → `group_telegram_-1001234`).
+
+**Privilege separation for package management** -- System packages (apk) are installed via root-privileged helper:
+
+| Component | User | Scope | Socket |
+|-----------|------|-------|--------|
+| Main app | goclaw (1000) | All operations except system packages | N/A |
+| pkg-helper | root | System package (apk) install/uninstall only | `/tmp/pkg.sock` (0660 root:goclaw) |
+
+The pkg-helper is started in `docker-entrypoint.sh` *before* privileges are dropped to goclaw. The main app connects to the Unix socket to request apk operations. System packages are persisted to `/app/data/.runtime/apk-packages` so they survive container recreation. Python and npm packages are installed directly by the goclaw user to writable runtime directories (`$PIP_TARGET`, `$NPM_CONFIG_PREFIX`).
 
 **Docker sandbox** -- Container-based isolation for shell command execution:
 
@@ -145,7 +157,53 @@ The workspace is injected into tools via `WithToolWorkspace(ctx)` context inject
 
 ---
 
-## 2. Encryption
+## 2. Docker Entrypoint & Runtime Configuration
+
+GoClaw runs in a non-root container with three privilege levels:
+
+**Phase 1: Root (docker-entrypoint.sh)**
+- Re-install persisted system packages from `/app/data/.runtime/apk-packages`
+- Start `pkg-helper` (root-privileged service listening on `/tmp/pkg.sock`)
+- Set up Python and Node.js runtime directories with proper env vars
+
+**Phase 2: Drop to goclaw user (su-exec)**
+- Main app runs as `goclaw` (UID 1000) via `su-exec goclaw /app/goclaw`
+- All agent operations execute in this context
+- System package requests are delegated to pkg-helper via Unix socket
+
+**Phase 3: Optional sandbox (per-agent)**
+- Exec operations can be sandboxed in Docker containers (configurable)
+- Sandbox containers inherit resource limits and security options
+
+### Docker Compose Security
+
+| Config | Purpose |
+|--------|---------|
+| `cap_drop: ALL` | Remove all Linux capabilities |
+| `cap_add: [SETUID, SETGID, CHOWN, DAC_OVERRIDE]` | Minimum required for su-exec and pkg-helper socket |
+| `security_opt: no-new-privileges:true` | Prevent privilege escalation |
+| `tmpfs: /tmp` | Writable /tmp (256MB, noexec, nosuid) |
+
+Docker-compose.yml mounts data volume at `/app/data`, which contains:
+- config.json (runtime configuration)
+- .runtime/apk-packages (persisted system packages list)
+- .runtime/pip (pip install target directory)
+- .runtime/npm-global (npm install prefix)
+- skills/ (uploaded skills)
+
+### Runtime Directory Structure
+
+| Path | Owner | Purpose |
+|------|-------|---------|
+| `/app/data/.runtime/apk-packages` | 0666 (rw-rw-rw-) | Persisted apk package list, written by pkg-helper |
+| `/app/data/.runtime/pip` | goclaw | Python packages installed via pip install --target |
+| `/app/data/.runtime/npm-global` | goclaw | npm packages installed globally to prefix |
+| `/app/data/.runtime/pip-cache` | goclaw | pip cache directory |
+| `/tmp/pkg.sock` | 0660 (rw-rw----) | Unix socket: owner root, group goclaw |
+
+---
+
+## 3. Encryption
 
 AES-256-GCM encryption for secrets stored in PostgreSQL. Key provided via `GOCLAW_ENCRYPTION_KEY` environment variable.
 
@@ -161,7 +219,7 @@ Backward compatible: values without the `aes-gcm:` prefix are returned as plaint
 
 ---
 
-## 3. Rate Limiting -- Gateway + Tool
+## 4. Rate Limiting -- Gateway + Tool
 
 Protection at two levels: gateway-wide (per user/IP) and tool-level (per session).
 
@@ -191,7 +249,7 @@ Gateway rate limiting applies to both WebSocket (`chat.send`) and HTTP (`/v1/cha
 
 ---
 
-## 4. RBAC -- 3 Roles
+## 5. RBAC -- 3 Roles
 
 Role-based access control for WebSocket RPC methods and HTTP API endpoints. Roles are hierarchical: higher levels include all permissions of lower levels.
 
@@ -222,7 +280,7 @@ Token-based role assignment happens during the WebSocket `connect` handshake. Sc
 
 ---
 
-## 5. Sandbox -- Container Lifecycle
+## 6. Sandbox -- Container Lifecycle
 
 Docker-based code isolation for shell command execution.
 
@@ -283,7 +341,21 @@ flowchart TD
 
 ---
 
-## 6. Security Logging Convention
+## 7. API Key Security
+
+API keys are generated and stored securely.
+
+| Mechanism | Detail |
+|-----------|--------|
+| Format | `goclaw_<32 hex chars>` (48 chars total) |
+| Key generation | 16 random bytes → hex-encoded, generated via `crypto.GenerateAPIKey()` |
+| Storage | SHA-256 hash stored in database (`api_keys.hash`), never the raw key. Raw key shown once at creation. |
+| Comparison | Timing-safe comparison via `crypto/subtle.ConstantTimeCompare` (not standard `==`) prevents timing attacks. Display prefix: first 8 hex chars of random part (e.g., `1a2b3c4d...`) |
+| API auth | HTTP header `Authorization: Bearer {token}` or WebSocket param. Validated via constant-time hash comparison. |
+
+---
+
+## 8. Security Logging Convention
 
 All security events use `slog.Warn` with a `security.*` prefix for consistent filtering and alerting.
 
@@ -299,7 +371,7 @@ Filter all security events by grepping for the `security.` prefix in log output.
 
 ---
 
-## 7. Hook Recursion Prevention
+## 9. Hook Recursion Prevention
 
 The hook system (quality gates) can trigger infinite recursion: an agent evaluator delegates to a reviewer → delegation completes → fires quality gate → delegates to reviewer again → infinite loop.
 
@@ -315,7 +387,7 @@ A context flag `hooks.WithSkipHooks(ctx, true)` prevents this. Three injection p
 
 ---
 
-## 8. Group File Writer Restrictions
+## 10. Group File Writer Restrictions
 
 In group chats (Telegram), write-sensitive operations are restricted to designated writers. This prevents unauthorized users from modifying agent files or resetting sessions in shared groups.
 
@@ -347,15 +419,28 @@ Writers are managed via `/addwriter` (reply to a user's message) and `/removewri
 
 ---
 
-## 9. Delegation Security
+## 11. Browser Pairing Security
 
-Agent delegation uses directed permissions via the `agent_links` table.
+Browser pairing allows web UI clients to authenticate without full admin credentials.
+
+| Mechanism | Detail |
+|-----------|--------|
+| Pairing code | 8-character alphanumeric code (A-Z, 2-9, excludes I/O/L for clarity), generated via `generatePairingCode()` in `internal/store/pg/pairing.go` |
+| Code TTL | 60 minutes; expired codes are auto-pruned from database |
+| Paired device TTL | 30 days; provides defense-in-depth expiry (paired devices auto-cleaned if unused) |
+| Pending limit | Max 3 pending pairing requests per account; prevents spam/enumeration |
+| HTTP access | Paired browsers access HTTP APIs via `X-GoClaw-Sender-Id` header (requires `channel=browser`). Fail-closed: `IsPaired()` check blocks unpaired sessions. Logs failed HTTP pairing auth attempts for security monitoring. |
+| Approval flow | Requires WebSocket `device.pair.approve` method from authenticated admin session, triggered by `pairing.approve` command. Admin approval adds sender to `paired_devices` table with `paired_by` audit field. |
+| Stale session fix | Uses `useRef` (not `useState`) for senderID in browser pairing form to prevent stale closure. Auto-kick after pairing: `RequireAuth` now accepts senderID for paired browser sessions (skips logout). |
+
+---
+
+## 12. Delegation Security
+
+Agent delegation is protected through delegation history tracking and concurrency controls.
 
 | Control | Scope | Description |
 |---------|-------|-------------|
-| Directed links | A → B | A single row `(A→B, outbound)` means A can delegate to B, not the reverse |
-| Per-user deny/allow | Per-link | `settings` JSONB on each link holds per-user restrictions (premium users only, blocked accounts) |
-| Per-link concurrency | A → B | `agent_links.max_concurrent` limits simultaneous delegations from A to B |
 | Per-agent load cap | B (all sources) | `other_config.max_delegation_load` limits total concurrent delegations targeting B |
 
 When concurrency limits are hit, the error message is written for LLM reasoning: *"Agent at capacity (5/5). Try a different agent or handle it yourself."*
@@ -367,18 +452,26 @@ When concurrency limits are hit, the error message is written for LLM reasoning:
 | File | Description |
 |------|-------------|
 | `internal/agent/input_guard.go` | Injection pattern detection (6 patterns) |
-| `internal/tools/scrub.go` | Credential scrubbing (regex-based redaction) |
+| `internal/tools/scrub.go` | Credential scrubbing (regex-based redaction), dynamic scrub values |
 | `internal/tools/shell.go` | Shell deny patterns, command validation |
 | `internal/tools/web_fetch.go` | Web content wrapping, SSRF protection |
-| `internal/permissions/policy.go` | RBAC (3 roles, scope-based access) |
-| `internal/gateway/ratelimit.go` | Gateway-level token bucket rate limiter |
-| `internal/sandbox/` | Docker sandbox manager, FsBridge |
+| `internal/permissions/policy.go` | RBAC (3 roles, scope-based access), method routing |
+| `internal/gateway/ratelimit.go` | Gateway-level token bucket rate limiter (per user/IP) |
+| `internal/sandbox/sandbox.go` | Docker sandbox configuration and modes |
+| `internal/sandbox/docker.go` | Docker sandbox creation, execution, pruning |
+| `internal/sandbox/fsbridge.go` | File operations in sandbox (read/write/list) |
 | `internal/crypto/aes.go` | AES-256-GCM encrypt/decrypt |
+| `internal/crypto/apikey.go` | API key generation (format, hash, display prefix) |
 | `internal/tools/types.go` | PathDenyable interface definition |
 | `internal/tools/filesystem.go` | Denied path checking (`checkDeniedPath` helper) |
 | `internal/tools/filesystem_list.go` | Denied path support + directory filtering |
-| `internal/hooks/context.go` | WithSkipHooks / SkipHooksFromContext (recursion prevention) |
-| `internal/hooks/engine.go` | Hook engine, evaluator registry |
+| `internal/gateway/methods/pairing.go` | Pairing RPC methods (request, approve, deny, list, revoke) |
+| `internal/store/pg/pairing.go` | Pairing store implementation (code generation, TTLs) |
+| `internal/store/pairing_store.go` | Pairing store interface definition |
+| `cmd/pkg-helper/main.go` | Root-privileged helper for apk add/del via Unix socket |
+| `internal/http/packages.go` | HTTP handlers for package management endpoints |
+| `internal/skills/package_lister.go` | Query installed packages from apk/pip3/npm |
+| `docker-entrypoint.sh` | Container initialization: setup runtime dirs, start pkg-helper, drop privileges |
 
 ---
 
@@ -386,9 +479,9 @@ When concurrency limits are hit, the error message is written for LLM reasoning:
 
 | Document | Relevant Content |
 |----------|-----------------|
-| [03-tools-system.md](./03-tools-system.md) | Shell deny patterns, exec approval, PathDenyable, delegation system, quality gates |
+| [03-tools-system.md](./03-tools-system.md) | Shell deny patterns, exec approval, PathDenyable, delegation system |
 | [04-gateway-protocol.md](./04-gateway-protocol.md) | WebSocket auth, RBAC, rate limiting |
-| [06-store-data-model.md](./06-store-data-model.md) | API key encryption, agent access control pipeline, agent_links table |
+| [06-store-data-model.md](./06-store-data-model.md) | API key encryption, agent access control pipeline |
 | [07-bootstrap-skills-memory.md](./07-bootstrap-skills-memory.md) | Context file merging, virtual files |
 | [08-scheduling-cron.md](./08-scheduling-cron.md) | Scheduler lanes, cron lifecycle, /stop and /stopall |
 | [10-tracing-observability.md](./10-tracing-observability.md) | Tracing and OTel export |

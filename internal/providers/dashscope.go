@@ -17,10 +17,10 @@ const (
 // skip thinking injection to avoid API "model not supported" errors.
 var dashscopeThinkingModels = map[string]bool{
 	// Qwen3.5 series — thinking + vision
-	"qwen3.5-plus":    true,
-	"qwen3.5-turbo":   true,
+	"qwen3.5-plus":  true,
+	"qwen3.5-turbo": true,
 	// Qwen3 hosted
-	"qwen3-max":       true,
+	"qwen3-max": true,
 	// Qwen3 open-weight (available as hosted inference)
 	"qwen3-235b-a22b": true,
 	"qwen3-32b":       true,
@@ -35,7 +35,7 @@ type DashScopeProvider struct {
 	*OpenAIProvider
 }
 
-func NewDashScopeProvider(apiKey, apiBase, defaultModel string) *DashScopeProvider {
+func NewDashScopeProvider(name, apiKey, apiBase, defaultModel string) *DashScopeProvider {
 	if apiBase == "" {
 		apiBase = dashscopeDefaultBase
 	}
@@ -43,11 +43,11 @@ func NewDashScopeProvider(apiKey, apiBase, defaultModel string) *DashScopeProvid
 		defaultModel = dashscopeDefaultModel
 	}
 	return &DashScopeProvider{
-		OpenAIProvider: NewOpenAIProvider("dashscope", apiKey, apiBase, defaultModel),
+		OpenAIProvider: NewOpenAIProvider(name, apiKey, apiBase, defaultModel),
 	}
 }
 
-func (p *DashScopeProvider) Name() string           { return "dashscope" }
+// Name is inherited from the embedded OpenAIProvider (returns the user-specified name).
 func (p *DashScopeProvider) SupportsThinking() bool { return true }
 
 // ModelSupportsThinking implements ModelThinkingCapable.
@@ -65,17 +65,7 @@ func (p *DashScopeProvider) applyThinkingGuard(req ChatRequest) ChatRequest {
 		return req
 	}
 
-	// Determine if this model supports thinking:
-	//   1. Prefer the pre-computed hint from the agent loop (ModelSupportsThinking field).
-	//   2. Fall back to local map lookup.
-	var supportsThinking bool
-	if req.ModelSupportsThinking != nil {
-		supportsThinking = *req.ModelSupportsThinking
-	} else {
-		supportsThinking = p.ModelSupportsThinking(req.Model)
-	}
-
-	if supportsThinking {
+	if p.ModelSupportsThinking(req.Model) {
 		// Clone Options to avoid mutating caller's map
 		opts := make(map[string]any, len(req.Options)+2)
 		maps.Copy(opts, req.Options)
@@ -104,7 +94,7 @@ func (p *DashScopeProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 
 	if len(req.Tools) > 0 {
 		slog.Debug("dashscope: tools present, falling back to non-streaming Chat")
-		resp, err := p.Chat(ctx, req)
+		resp, err := p.OpenAIProvider.Chat(ctx, req)
 		if err != nil {
 			return nil, err
 		}

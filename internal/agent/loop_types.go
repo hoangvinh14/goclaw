@@ -48,6 +48,7 @@ type Loop struct {
 	maxIterations int
 	maxToolCalls  int
 	workspace        string
+	dataDir          string // global workspace root for team workspace resolution
 	workspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent overrides from DB (nil = use global defaults)
@@ -110,6 +111,11 @@ type Loop struct {
 	// Self-evolve: predefined agents can update SOUL.md through chat
 	selfEvolve bool
 
+	// Skill learning loop: when skillEvolve=true, the loop injects nudges reminding
+	// the agent to capture reusable patterns as skills via skill_manage.
+	skillEvolve        bool
+	skillNudgeInterval int // nudge every N tool calls (0 = disabled, 15 = default)
+
 	// Group writer cache for system prompt injection
 	groupWriterCache *store.GroupWriterCache
 
@@ -160,6 +166,7 @@ type LoopConfig struct {
 	MaxIterations   int
 	MaxToolCalls    int
 	Workspace        string
+	DataDir          string // global workspace root for team workspace resolution
 	WorkspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent DB overrides (nil = use global defaults)
@@ -218,6 +225,10 @@ type LoopConfig struct {
 
 	// Self-evolve: predefined agents can update SOUL.md (style/tone) through chat
 	SelfEvolve bool
+
+	// Skill evolution: agent learning loop config (from other_config JSONB)
+	SkillEvolve        bool
+	SkillNudgeInterval int // 0 = disabled, 15 = default
 
 	// Group writer cache for system prompt injection
 	GroupWriterCache *store.GroupWriterCache
@@ -283,6 +294,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
 		workspace:              cfg.Workspace,
+		dataDir:                cfg.DataDir,
 		workspaceSharing:       cfg.WorkspaceSharing,
 		restrictToWs:           cfg.RestrictToWs,
 		subagentsCfg:           cfg.SubagentsCfg,
@@ -314,6 +326,8 @@ func NewLoop(cfg LoopConfig) *Loop {
 		builtinToolSettings:    cfg.BuiltinToolSettings,
 		thinkingLevel:          cfg.ThinkingLevel,
 		selfEvolve:             cfg.SelfEvolve,
+		skillEvolve:            cfg.SkillEvolve,
+		skillNudgeInterval:     cfg.SkillNudgeInterval,
 		groupWriterCache:       cfg.GroupWriterCache,
 		teamStore:              cfg.TeamStore,
 		secureCLIStore:         cfg.SecureCLIStore,

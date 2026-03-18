@@ -26,7 +26,6 @@
     "knowledgeGraph": "Knowledge Graph",
     "traces": "Traces",
     "realtimeEvents": "Realtime Events",
-    "delegations": "Delegations",
     "usage": "Usage",
     "logs": "Logs",
     "storage": "Storage",
@@ -38,6 +37,7 @@
     "activity": "Activity",
     "cliCredentials": "CLI Credentials",
     "apiKeys": "API Keys",
-    "apiDocs": "API Docs"
+    "apiDocs": "API Docs",
+    "packages": "Packages"
   }
 }

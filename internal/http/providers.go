@@ -125,7 +125,7 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 		h.providerReg.Register(providers.NewAnthropicProvider(p.APIKey,
 			providers.WithAnthropicBaseURL(p.APIBase)))
 	case store.ProviderDashScope:
-		h.providerReg.Register(providers.NewDashScopeProvider(p.APIKey, p.APIBase, ""))
+		h.providerReg.Register(providers.NewDashScopeProvider(p.Name, p.APIKey, p.APIBase, ""))
 	case store.ProviderBailian:
 		base := p.APIBase
 		if base == "" {
@@ -270,9 +270,8 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// Prevent updating immutable fields
-	delete(updates, "id")
-	delete(updates, "created_at")
+	// Allowlist: only permit known provider columns.
+	updates = filterAllowedKeys(updates, providerAllowedFields)
 
 	// Track old name before update for registry cleanup
 	var oldName string

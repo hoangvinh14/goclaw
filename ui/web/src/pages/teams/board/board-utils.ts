@@ -3,9 +3,9 @@ import type { TeamTaskData, TeamMemberData } from "@/types/team";
 /** All kanban column statuses in display order */
 export const KANBAN_STATUSES = [
   "pending",
+  "blocked",
   "in_progress",
   "completed",
-  "blocked",
   "failed",
   "cancelled",
 ] as const;
@@ -62,6 +62,17 @@ export function buildMemberLookup(
   const map = new Map<string, string>();
   for (const m of members)
     map.set(m.agent_id, m.display_name || m.agent_key || m.agent_id.slice(0, 8));
+  return map;
+}
+
+/** Build agent_id -> emoji lookup from members */
+export function buildEmojiLookup(
+  members: TeamMemberData[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const m of members) {
+    if (m.emoji) map.set(m.agent_id, m.emoji);
+  }
   return map;
 }
 

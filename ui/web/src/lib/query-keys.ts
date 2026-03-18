@@ -62,10 +62,6 @@ export const queryKeys = {
     all: ["usage"] as const,
     records: (params: Record<string, unknown>) => ["usage", "records", params] as const,
   },
-  delegations: {
-    all: ["delegations"] as const,
-    list: (params: Record<string, unknown>) => ["delegations", params] as const,
-  },
   teams: {
     all: ["teams"] as const,
     detail: (id: string) => ["teams", id] as const,
@@ -73,6 +69,10 @@ export const queryKeys = {
   memory: {
     all: ["memory"] as const,
     list: (params: Record<string, unknown>) => ["memory", params] as const,
+  },
+  packages: {
+    all: ["packages"] as const,
+    runtimes: ["packages", "runtimes"] as const,
   },
   kg: {
     all: ["kg"] as const,

@@ -20,7 +20,7 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
   const { t } = useTranslation("teams");
   const {
     getTeam, getTeamTasks, getTeamScopes, addMember, removeMember, deleteTeam,
-    getTaskDetail,
+    getTaskDetail, getTaskLight, deleteTask, deleteTasksBulk,
   } = useTeams();
 
   const [team, setTeam] = useState<TeamData | null>(null);
@@ -55,7 +55,7 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
         if (!cancelled) {
           setTeam(res.team);
           setMembers(res.members ?? []);
-          setScopes(scopeList);
+          setScopes(scopeList.filter((s) => s.chat_id));
         }
       } catch { /* ignore */ }
       finally { if (!cancelled) setLoading(false); }
@@ -89,7 +89,6 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
         onDelete={() => setDeleteOpen(true)}
         onSettings={() => setInfoOpen(true)}
         onMembers={() => setMembersOpen(true)}
-        onWorkspace={() => setWorkspaceOpen(true)}
         onV2Click={() => setVersionModalOpen(true)}
       />
 
@@ -100,6 +99,10 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
         isTeamV2={isTeamV2}
         getTeamTasks={getTeamTasks}
         getTaskDetail={getTaskDetail}
+        getTaskLight={getTaskLight}
+        deleteTask={deleteTask}
+        deleteTasksBulk={deleteTasksBulk}
+        onWorkspace={() => setWorkspaceOpen(true)}
       />
 
       {/* Team info + settings + members dialog */}

@@ -189,7 +189,8 @@ func (c *WSClient) getWSEndpoint(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("ws endpoint request: %w", err)
 	}
@@ -316,11 +317,13 @@ func (c *WSClient) sendResponse(original *wsFrame, headers map[string]string) {
 	respHeaders = append(respHeaders, wsHeader{Key: "biz_rt", Value: "0"})
 
 	respPayload, _ := json.Marshal(map[string]any{
-		"code": 0,
+		"code": http.StatusOK,
 		"msg":  "success",
 	})
 
 	resp := &wsFrame{
+		SeqID:   original.SeqID,
+		LogID:   original.LogID,
 		Method:  frameTypeData,
 		Service: original.Service,
 		Headers: respHeaders,

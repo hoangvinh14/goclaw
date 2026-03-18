@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
-import { X, Info } from "lucide-react";
+import { X, Info, Loader2 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -116,7 +116,7 @@ export function TeamCreateDialog({ open, onOpenChange, onCreate }: TeamCreateDia
         <DialogHeader>
           <DialogTitle>{t("create.title")}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 py-4 px-0.5 -mx-0.5 overflow-y-auto min-h-0">
+        <div className="space-y-4 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 overflow-y-auto min-h-0">
           <div className="space-y-2">
             <Label htmlFor="teamName">{t("create.name")}</Label>
             <Input
@@ -199,7 +199,8 @@ export function TeamCreateDialog({ open, onOpenChange, onCreate }: TeamCreateDia
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             {t("create.cancel")}
           </Button>
-          <Button onClick={handleCreate} disabled={!name.trim() || !leadOptions.some((o) => o.value === lead) || loading}>
+          <Button onClick={handleCreate} disabled={!name.trim() || !leadOptions.some((o) => o.value === lead) || loading} className="gap-1">
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {loading ? t("create.creating") : t("create.create")}
           </Button>
         </DialogFooter>

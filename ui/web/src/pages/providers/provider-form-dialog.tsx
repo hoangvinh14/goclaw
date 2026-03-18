@@ -26,6 +26,7 @@ import { PROVIDER_TYPES } from "@/constants/providers";
 import { OAuthSection } from "./provider-oauth-section";
 import { CLISection } from "./provider-cli-section";
 import { ACPSection } from "./provider-acp-section";
+import { Loader2 } from "lucide-react";
 
 interface ProviderFormDialogProps {
   open: boolean;
@@ -145,7 +146,7 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit, exi
           <DialogTitle>{isEdit ? t("form.editTitle") : t("form.createTitle")}</DialogTitle>
           <DialogDescription>{t("form.configure")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4 px-0.5 -mx-0.5 overflow-y-auto min-h-0">
+        <div className="space-y-4 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 overflow-y-auto min-h-0">
           {/* Provider type selector — always shown in create mode */}
           {!isEdit && (
             <ProviderTypeSelect
@@ -293,7 +294,9 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit, exi
             <Button
               onClick={handleSubmit}
               disabled={!name.trim() || !isValidSlug(name) || !providerType || loading}
+              className="gap-1"
             >
+              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {loading
                 ? (isEdit ? t("form.saving") : t("form.creating"))
                 : isEdit ? t("form.save") : t("form.create")}

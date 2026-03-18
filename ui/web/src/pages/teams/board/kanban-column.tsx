@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { AnimatePresence, LayoutGroup } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "react-i18next";
 import { STATUS_COLORS } from "./board-utils";
@@ -10,10 +11,13 @@ interface KanbanColumnProps {
   title: string;
   tasks: TeamTaskData[];
   isTeamV2?: boolean;
+  emojiLookup?: Map<string, string>;
+  taskLookup?: Map<string, string>;
   onTaskClick: (task: TeamTaskData) => void;
+  onDeleteTask?: (taskId: string) => void;
 }
 
-export const KanbanColumn = memo(function KanbanColumn({ columnId, title, tasks, isTeamV2, onTaskClick }: KanbanColumnProps) {
+export const KanbanColumn = memo(function KanbanColumn({ columnId, title, tasks, isTeamV2, emojiLookup, taskLookup, onTaskClick, onDeleteTask }: KanbanColumnProps) {
   const { t } = useTranslation("teams");
 
   return (
@@ -28,14 +32,21 @@ export const KanbanColumn = memo(function KanbanColumn({ columnId, title, tasks,
         {tasks.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">{t("board.emptyColumn")}</div>
         ) : (
-          tasks.map((task) => (
-            <KanbanCard
-              key={task.id}
-              task={task}
-              isTeamV2={isTeamV2}
-              onClick={() => onTaskClick(task)}
-            />
-          ))
+          <LayoutGroup>
+            <AnimatePresence mode="popLayout">
+              {tasks.map((task) => (
+                <KanbanCard
+                  key={task.id}
+                  task={task}
+                  isTeamV2={isTeamV2}
+                  emojiLookup={emojiLookup}
+                  taskLookup={taskLookup}
+                  onClick={() => onTaskClick(task)}
+                  onDelete={onDeleteTask}
+                />
+              ))}
+            </AnimatePresence>
+          </LayoutGroup>
         )}
       </div>
     </div>

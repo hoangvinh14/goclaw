@@ -14,8 +14,8 @@ type teamAccessSettings struct {
 	DenyUserIDs           []string `json:"deny_user_ids"`
 	AllowChannels         []string `json:"allow_channels"`
 	DenyChannels          []string `json:"deny_channels"`
-	ProgressNotifications *bool    `json:"progress_notifications,omitempty"`
-	FollowupIntervalMins  *int     `json:"followup_interval_minutes,omitempty"`
+	Notifications        *TeamNotifyConfig `json:"notifications,omitempty"`
+	FollowupIntervalMins *int              `json:"followup_interval_minutes,omitempty"`
 	FollowupMaxReminders  *int     `json:"followup_max_reminders,omitempty"`
 	EscalationMode        string   `json:"escalation_mode,omitempty"`
 	EscalationActions     []string `json:"escalation_actions,omitempty"`
@@ -23,7 +23,7 @@ type teamAccessSettings struct {
 
 // checkTeamAccess validates whether a user/channel combination is authorized
 // for team operations. Returns nil if access is allowed.
-// System channels (ChannelDelegate, ChannelSystem) always pass.
+// System channels (ChannelTeammate, ChannelSystem) always pass.
 // Empty settings = open access (no restrictions).
 func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
 	if len(settings) == 0 || string(settings) == "{}" {
@@ -35,7 +35,7 @@ func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
 	}
 
 	// System/internal access always allowed
-	if channel == ChannelDelegate || channel == ChannelSystem {
+	if channel == ChannelTeammate || channel == ChannelSystem {
 		return nil
 	}
 

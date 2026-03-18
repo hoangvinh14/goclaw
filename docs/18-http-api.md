@@ -115,7 +115,8 @@ CRUD operations for agent management. Requires `X-GoClaw-User-Id` header for mul
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/agents/{id}/instances` | List user instances |
-| `GET` | `/v1/agents/{id}/instances/{userID}/files` | Get user context files |
+| `GET` | `/v1/agents/{id}/instances/{userID}/files` | List user context files |
+| `GET` | `/v1/agents/{id}/instances/{userID}/files/{fileName}` | Get specific user context file |
 | `PUT` | `/v1/agents/{id}/instances/{userID}/files/{fileName}` | Update user file (USER.md only) |
 | `PATCH` | `/v1/agents/{id}/instances/{userID}/metadata` | Update instance metadata |
 
@@ -147,7 +148,7 @@ Response: `{content, run_id, usage?}`. Used by orchestrators (n8n, Paperclip) to
 | `GET` | `/v1/skills/{id}` | Get skill details |
 | `PUT` | `/v1/skills/{id}` | Update skill metadata |
 | `DELETE` | `/v1/skills/{id}` | Delete skill (not system skills) |
-| `POST` | `/v1/skills/{id}/toggle` | Enable/disable skill |
+| `POST` | `/v1/skills/{id}/toggle` | Toggle skill enabled/disabled state |
 
 ### Skill Grants
 
@@ -157,7 +158,12 @@ Response: `{content, run_id, usage?}`. Used by orchestrators (n8n, Paperclip) to
 | `DELETE` | `/v1/skills/{id}/grants/agent/{agentID}` | Revoke from agent |
 | `POST` | `/v1/skills/{id}/grants/user` | Grant skill to user |
 | `DELETE` | `/v1/skills/{id}/grants/user/{userID}` | Revoke from user |
-| `GET` | `/v1/agents/{agentID}/skills` | List skills with grant status |
+
+### Agent Skills
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/agents/{agentID}/skills` | List skills with grant status for agent |
 
 ### Skill Files & Dependencies
 
@@ -273,6 +279,8 @@ Grants support `tool_allow` and `tool_deny` JSON arrays for fine-grained tool fi
 | `PUT` | `/v1/tools/custom/{id}` | Update tool |
 | `DELETE` | `/v1/tools/custom/{id}` | Delete tool |
 
+Query parameters for list: `agent_id`, `search`, `limit`, `offset`
+
 ### Direct Invocation
 
 ```
@@ -380,22 +388,168 @@ Compaction runs in the background. Falls back to hard delete if no LLM provider 
 
 ---
 
-## 14. Traces
+## 14. Delegations
+
+Agent task delegation and authorization history.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/delegations` | List delegations (paginated, filterable) |
+| `GET` | `/v1/delegations/{id}` | Get delegation record |
+
+**Filters:** `source_agent_id`, `target_agent_id`, `team_id`, `user_id`, `status`, `limit`, `offset`
+
+---
+
+## 15. Team Events
+
+Team activity and audit trail.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/teams/{id}/events` | List team events (paginated) |
+
+---
+
+## 16. Secure CLI Credentials
+
+CLI authentication credentials for secure command execution. Requires **admin role** (full gateway token or empty gateway token in dev/single-user mode).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/cli-credentials` | List all credentials |
+| `POST` | `/v1/cli-credentials` | Create new credential |
+| `GET` | `/v1/cli-credentials/{id}` | Get credential details |
+| `PUT` | `/v1/cli-credentials/{id}` | Update credential |
+| `DELETE` | `/v1/cli-credentials/{id}` | Delete credential |
+| `GET` | `/v1/cli-credentials/presets` | Get preset credential templates |
+| `POST` | `/v1/cli-credentials/{id}/test` | Test credential connection (dry-run) |
+
+---
+
+## 17. Runtime & Packages Management
+
+Manage system (apk), Python (pip), and Node (npm) package installation in the runtime container. Requires authentication. When `GOCLAW_GATEWAY_TOKEN` is empty (dev/single-user mode), all users get admin role and can manage packages.
+
+### List Installed Packages
+
+```
+GET /v1/packages
+```
+
+Returns all installed packages grouped by category.
+
+**Response:**
+
+```json
+{
+  "system": [
+    {"name": "github-cli", "version": "2.72.0-r6"},
+    {"name": "curl", "version": "8.9.1-r1"}
+  ],
+  "pip": [
+    {"name": "pandas", "version": "2.0.0"},
+    {"name": "requests", "version": "2.31.0"}
+  ],
+  "npm": [
+    {"name": "typescript", "version": "5.1.0"},
+    {"name": "docx", "version": "8.12.0"}
+  ]
+}
+```
+
+### Install Package
+
+```
+POST /v1/packages/install
+```
+
+**Request:**
+
+```json
+{
+  "package": "github-cli"
+}
+```
+
+Package name can optionally include prefix: `"pip:pandas"` or `"npm:typescript"`. Without prefix, defaults to system (apk).
+
+**Validation:** Package names must match `^[a-zA-Z0-9@][a-zA-Z0-9._+\-/@]*$` (max 4096 bytes). Names starting with `-` are rejected to prevent argument injection.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "error": ""
+}
+```
+
+| Category | Manager | Behavior |
+|----------|---------|----------|
+| System (apk) | root-privileged pkg-helper | Sent to `/tmp/pkg.sock`, persisted to `/app/data/.runtime/apk-packages` for container recreates |
+| Python (pip) | direct install | Installs to `$PIP_TARGET` (writable runtime dir) with `PIP_BREAK_SYSTEM_PACKAGES=1` |
+| Node (npm) | direct install | Installs globally to `$NPM_CONFIG_PREFIX` (writable runtime dir) |
+
+### Uninstall Package
+
+```
+POST /v1/packages/uninstall
+```
+
+Same format as install. System packages are removed from persist file and container state.
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "error": ""
+}
+```
+
+### Check Runtime Availability
+
+```
+GET /v1/packages/runtimes
+```
+
+Check if Python and Node runtimes are available in the container.
+
+**Response:**
+
+```json
+{
+  "python": true,
+  "node": true
+}
+```
+
+---
+
+## 18. Traces & Costs
 
 LLM call tracing and cost analysis.
+
+### Traces
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/traces` | List traces (paginated, filterable) |
 | `GET` | `/v1/traces/{traceID}` | Get trace with spans |
 | `GET` | `/v1/traces/{traceID}/export` | Export trace tree (gzipped JSON) |
-| `GET` | `/v1/costs/summary` | Cost summary by agent/time range |
 
 **Filters:** `agent_id`, `user_id`, `session_key`, `status`, `channel`
 
+### Costs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/costs/summary` | Cost summary by agent/time range |
+
 ---
 
-## 15. Usage & Analytics
+## 19. Usage & Analytics
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -409,7 +563,7 @@ LLM call tracing and cost analysis.
 
 ---
 
-## 16. Activity & Audit
+## 20. Activity & Audit
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -417,7 +571,7 @@ LLM call tracing and cost analysis.
 
 ---
 
-## 17. Storage
+## 21. Storage
 
 Workspace file management.
 
@@ -426,13 +580,17 @@ Workspace file management.
 | `GET` | `/v1/storage/files` | List files with depth limiting |
 | `GET` | `/v1/storage/files/{path...}` | Read file (JSON or raw) |
 | `DELETE` | `/v1/storage/files/{path...}` | Delete file/directory |
-| `GET` | `/v1/storage/size` | Stream storage size (SSE, cached 60 min) |
+| `GET` | `/v1/storage/size` | Stream storage size (Server-Sent Events, cached 60 min) |
 
-Use `?raw=true` to serve native MIME type. Protected directories `skills/` and `skills-store/` cannot be deleted. Path traversal and symlink attacks are blocked.
+**Query parameters:**
+- `?raw=true` — Serve native MIME type instead of JSON
+- `?depth=N` — Limit directory traversal depth
+
+**Security:** Protected directories `skills/` and `skills-store/` cannot be deleted. Path traversal and symlink attacks are blocked.
 
 ---
 
-## 18. Media
+## 22. Media
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -441,7 +599,7 @@ Use `?raw=true` to serve native MIME type. Protected directories `skills/` and `
 
 ---
 
-## 19. Files
+## 23. Files
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -451,7 +609,7 @@ Auth via Bearer token or `?token=` query param (for `<img>` tags). MIME type aut
 
 ---
 
-## 20. API Keys
+## 24. API Keys
 
 Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth](20-api-keys-auth.md) for the full authentication and authorization model.
 
@@ -459,7 +617,7 @@ Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth]
 |--------|------|-------------|
 | `GET` | `/v1/api-keys` | List all API keys (masked) |
 | `POST` | `/v1/api-keys` | Create API key (returns raw key once) |
-| `DELETE` | `/v1/api-keys/{id}` | Revoke API key |
+| `POST` | `/v1/api-keys/{id}/revoke` | Revoke API key |
 
 ### Create Request
 
@@ -489,7 +647,7 @@ Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth]
 
 ---
 
-## 21. OAuth
+## 25. OAuth
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -500,7 +658,7 @@ Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth]
 
 ---
 
-## 22. System
+## 26. System
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -519,7 +677,7 @@ Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth]
 
 ---
 
-## 23. MCP Bridge
+## 27. MCP Bridge
 
 Exposes GoClaw tools to Claude CLI via streamable HTTP at `/mcp/bridge`. Only listens on localhost. Protected by gateway token with HMAC-signed context headers.
 
@@ -558,27 +716,52 @@ Error messages are localized based on the `Accept-Language` header. HTTP status 
 
 ---
 
+## Notes on WebSocket-Only Endpoints
+
+The following operations are **only available via WebSocket RPC**, not HTTP:
+
+- **Sessions:** List, preview, patch, delete, reset (use WebSocket method `sessions.*`)
+- **Cron jobs:** List, create, update, delete, logs (use WebSocket method `cron.*`)
+- **Send messages:** Send to channels (use WebSocket method `send.*`)
+- **Config management:** Get, apply, patch (use WebSocket method `config.*`)
+
+These endpoints require an active WebSocket connection to the `/ws` endpoint with proper authentication and agent context.
+
+---
+
 ## File Reference
 
 | File | Purpose |
 |------|---------|
 | `internal/http/chat_completions.go` | OpenAI-compatible chat API |
 | `internal/http/responses.go` | OpenResponses protocol |
-| `internal/http/agents.go` | Agent CRUD + shares |
-| `internal/http/skills.go` | Skill management |
-| `internal/http/providers.go` | Provider CRUD |
-| `internal/http/mcp.go` | MCP server management |
+| `internal/http/agents.go` | Agent CRUD + shares + instances + files |
+| `internal/http/skills.go` | Skill management + grants + versions |
+| `internal/http/providers.go` | Provider CRUD + verification + models |
+| `internal/http/mcp.go` | MCP server management + grants + requests |
 | `internal/http/custom_tools.go` | Custom tool CRUD |
 | `internal/http/builtin_tools.go` | Built-in tool management |
-| `internal/http/channel_instances.go` | Channel instance management |
-| `internal/http/memory.go` | Memory document management |
-| `internal/http/knowledge_graph.go` | Knowledge graph API |
-| `internal/http/traces.go` | LLM trace listing |
-| `internal/http/usage.go` | Usage analytics |
+| `internal/http/tools_invoke.go` | Direct tool invocation |
+| `internal/http/channel_instances.go` | Channel instance management + contacts |
+| `internal/http/memory_handlers.go` | Memory document management + search + indexing |
+| `internal/http/knowledge_graph.go` | Knowledge graph API (entities, relations, traversal) |
+| `internal/http/traces.go` | LLM trace listing + export |
+| `internal/http/usage.go` | Usage analytics + costs |
 | `internal/http/activity.go` | Activity audit log |
-| `internal/http/storage.go` | Workspace file management |
-| `internal/http/api_keys.go` | API key management |
-| `internal/http/auth.go` | Authentication helpers |
+| `internal/http/storage.go` | Workspace file management + size calculation |
+| `internal/http/media_upload.go` | Media file upload |
+| `internal/http/media_serve.go` | Media file serving |
+| `internal/http/files.go` | Workspace file serving |
+| `internal/http/api_keys.go` | API key management + revoke |
+| `internal/http/delegations.go` | Delegation history API |
+| `internal/http/team_events.go` | Team event history API |
+| `internal/http/secure_cli.go` | CLI credential management |
+| `internal/http/packages.go` | Runtime package management (apk/pip/npm) |
+| `internal/http/pending_messages.go` | Pending message groups + compaction |
+| `internal/http/oauth.go` | OAuth authentication flows |
 | `internal/http/openapi.go` | OpenAPI spec + Swagger UI |
+| `internal/http/auth.go` | Authentication helpers |
 | `internal/gateway/server.go` | HTTP mux and route wiring |
 | `cmd/gateway.go` | Handler instantiation and wiring |
+| `cmd/pkg-helper/main.go` | Root-privileged system package helper (apk add/del) |
+| `internal/skills/package_lister.go` | Query installed packages from apk/pip3/npm |

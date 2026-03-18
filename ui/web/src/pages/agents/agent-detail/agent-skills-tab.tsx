@@ -31,12 +31,18 @@ export function AgentSkillsTab({ agentId }: AgentSkillsTabProps) {
   const [search, setSearch] = useState("");
   const [toggling, setToggling] = useState<string | null>(null);
 
-  const filtered = skills.filter(
-    (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.slug.toLowerCase().includes(search.toLowerCase()) ||
-      s.description.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = skills
+    .filter(
+      (s) =>
+        s.name.toLowerCase().includes(search.toLowerCase()) ||
+        s.slug.toLowerCase().includes(search.toLowerCase()) ||
+        s.description.toLowerCase().includes(search.toLowerCase()),
+    )
+    .sort((a, b) => {
+      // Priority: ungranted non-system (0) → system (1) → granted (2)
+      const rank = (s: typeof a) => s.is_system ? 1 : s.granted ? 2 : 0;
+      return rank(a) - rank(b);
+    });
 
   const handleToggle = async (skillId: string, granted: boolean) => {
     setToggling(skillId);

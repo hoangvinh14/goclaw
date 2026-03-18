@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -23,6 +24,9 @@ interface Props {
 const NONE_PRESET = "__none__";
 
 export function CliCredentialFormDialog({ open, onOpenChange, credential, presets, onSubmit }: Props) {
+  const { t } = useTranslation("cli-credentials");
+  const { t: tc } = useTranslation("common");
+
   const [selectedPreset, setSelectedPreset] = useState(NONE_PRESET);
   const [binaryName, setBinaryName] = useState("");
   const [binaryPath, setBinaryPath] = useState("");
@@ -82,7 +86,7 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
 
   const handleSubmit = async () => {
     if (!binaryName.trim()) {
-      setError("Binary name is required.");
+      setError(t("form.binaryNameRequired"));
       return;
     }
     setLoading(true);
@@ -104,7 +108,7 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
       await onSubmit(payload);
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save.");
+      setError(err instanceof Error ? err.message : t("form.failedToSave"));
     } finally {
       setLoading(false);
     }
@@ -112,22 +116,22 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
 
   return (
     <Dialog open={open} onOpenChange={(v) => !loading && onOpenChange(v)}>
-      <DialogContent className="max-h-[85vh] flex flex-col sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] flex flex-col sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit CLI Credential" : "Add CLI Credential"}</DialogTitle>
+          <DialogTitle>{isEdit ? t("form.editTitle") : t("form.createTitle")}</DialogTitle>
         </DialogHeader>
 
-        <div className="grid gap-4 py-2 px-0.5 -mx-0.5 overflow-y-auto min-h-0">
+        <div className="grid gap-4 py-2 -mx-4 px-4 sm:-mx-6 sm:px-6 overflow-y-auto min-h-0">
           {/* Preset selector — only on create */}
           {!isEdit && presetEntries.length > 0 && (
             <div className="grid gap-1.5">
-              <Label>Preset</Label>
+              <Label>{t("form.preset")}</Label>
               <Select value={selectedPreset} onValueChange={applyPreset}>
                 <SelectTrigger className="text-base md:text-sm">
-                  <SelectValue placeholder="Select a preset (optional)" />
+                  <SelectValue placeholder={t("form.presetPlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE_PRESET}>No preset (manual)</SelectItem>
+                  <SelectItem value={NONE_PRESET}>{t("form.noPreset")}</SelectItem>
                   {presetEntries.map(([k, p]) => (
                     <SelectItem key={k} value={k}>
                       {p.binary_name} — {p.description}
@@ -136,27 +140,27 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Selecting a preset auto-fills fields and shows required env vars.
+                {t("form.presetHint")}
               </p>
             </div>
           )}
 
-
           {/* Existing credentials indicator (edit mode) */}
           {isEdit && (
             <p className="text-xs text-muted-foreground rounded-md border border-dashed p-2">
-              Credentials are encrypted and cannot be displayed. Leave environment variables empty to keep existing values, or re-enter to update.
+              {t("form.encryptedHint")}
             </p>
           )}
+
           {/* Env var inputs from preset */}
           {activePreset && activePreset.env_vars.length > 0 && (
             <div className="grid gap-3 rounded-md border p-3">
-              <p className="text-sm font-medium">Environment Variables</p>
+              <p className="text-sm font-medium">{t("form.envVars")}</p>
               {activePreset.env_vars.map((ev) => (
                 <div key={ev.name} className="grid gap-1.5">
                   <Label htmlFor={`env-${ev.name}`}>
                     {ev.name}
-                    {ev.optional && <span className="ml-1 text-xs text-muted-foreground">(optional)</span>}
+                    {ev.optional && <span className="ml-1 text-xs text-muted-foreground">({tc("optional")})</span>}
                   </Label>
                   <Input
                     id={`env-${ev.name}`}
@@ -177,34 +181,34 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <Label htmlFor="cc-name">Binary Name</Label>
+              <Label htmlFor="cc-name">{t("form.binaryName")}</Label>
               <Input
                 id="cc-name"
                 value={binaryName}
                 onChange={(e) => setBinaryName(e.target.value)}
-                placeholder="e.g. gh"
+                placeholder={t("placeholders.binaryName")}
                 className="text-base md:text-sm"
               />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="cc-path">Binary Path <span className="text-xs text-muted-foreground">(optional)</span></Label>
+              <Label htmlFor="cc-path">{t("form.binaryPath")} <span className="text-xs text-muted-foreground">({tc("optional")})</span></Label>
               <Input
                 id="cc-path"
                 value={binaryPath}
                 onChange={(e) => setBinaryPath(e.target.value)}
-                placeholder="/usr/local/bin/gh"
+                placeholder={t("placeholders.binaryPath")}
                 className="text-base md:text-sm"
               />
             </div>
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="cc-desc">Description</Label>
+            <Label htmlFor="cc-desc">{tc("description")}</Label>
             <Textarea
               id="cc-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What this CLI tool does"
+              placeholder={t("placeholders.description")}
               rows={2}
               className="text-base md:text-sm"
             />
@@ -212,17 +216,17 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
-              <Label htmlFor="cc-deny-args">Deny Args <span className="text-xs text-muted-foreground">(comma-separated)</span></Label>
+              <Label htmlFor="cc-deny-args">{t("form.denyArgs")} <span className="text-xs text-muted-foreground">({t("form.commaSeparated")})</span></Label>
               <Input
                 id="cc-deny-args"
                 value={denyArgs}
                 onChange={(e) => setDenyArgs(e.target.value)}
-                placeholder="--admin, --force"
+                placeholder={t("placeholders.denyArgs")}
                 className="text-base md:text-sm"
               />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="cc-timeout">Timeout (s)</Label>
+              <Label htmlFor="cc-timeout">{t("form.timeout")}</Label>
               <Input
                 id="cc-timeout"
                 type="number"
@@ -235,51 +239,51 @@ export function CliCredentialFormDialog({ open, onOpenChange, credential, preset
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="cc-deny-verbose">Deny Verbose Args <span className="text-xs text-muted-foreground">(comma-separated)</span></Label>
+            <Label htmlFor="cc-deny-verbose">{t("form.denyVerbose")} <span className="text-xs text-muted-foreground">({t("form.commaSeparated")})</span></Label>
             <Input
               id="cc-deny-verbose"
               value={denyVerbose}
               onChange={(e) => setDenyVerbose(e.target.value)}
-              placeholder="-v, --verbose"
+              placeholder={t("placeholders.denyVerbose")}
               className="text-base md:text-sm"
             />
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="cc-tips">Tips</Label>
+            <Label htmlFor="cc-tips">{t("form.tips")}</Label>
             <Textarea
               id="cc-tips"
               value={tips}
               onChange={(e) => setTips(e.target.value)}
-              placeholder="Usage tips for the agent"
+              placeholder={t("placeholders.tips")}
               rows={2}
               className="text-base md:text-sm"
             />
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="cc-agent">Agent ID <span className="text-xs text-muted-foreground">(optional — leave blank for global)</span></Label>
+            <Label htmlFor="cc-agent">{t("form.agentId")} <span className="text-xs text-muted-foreground">({t("form.agentIdHint")})</span></Label>
             <Input
               id="cc-agent"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
-              placeholder="agent-id"
+              placeholder={t("placeholders.agentId")}
               className="text-base md:text-sm"
             />
           </div>
 
           <div className="flex items-center gap-2">
             <Switch id="cc-enabled" checked={enabled} onCheckedChange={setEnabled} />
-            <Label htmlFor="cc-enabled">Enabled</Label>
+            <Label htmlFor="cc-enabled">{tc("enabled")}</Label>
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>{tc("cancel")}</Button>
           <Button onClick={handleSubmit} disabled={loading}>
-            {loading ? "Saving..." : isEdit ? "Update" : "Create"}
+            {loading ? tc("saving") : isEdit ? tc("update") : tc("create")}
           </Button>
         </DialogFooter>
       </DialogContent>

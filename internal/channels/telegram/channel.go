@@ -23,6 +23,7 @@ type Channel struct {
 	*channels.BaseChannel
 	bot              *telego.Bot
 	config           config.TelegramConfig
+	httpClient       *http.Client
 	pairingService   store.PairingStore
 	agentStore       store.AgentStore // for group file writer management (nil if not configured)
 	teamStore        store.TeamStore  // for /tasks, /task_detail commands (nil if not configured)
@@ -61,17 +62,20 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		opts = append(opts, telego.WithAPIServer(cfg.APIServer))
 	}
 
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
 	if cfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(cfg.Proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", cfg.Proxy, parseErr)
 		}
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-		}))
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = http.ProxyURL(proxyURL)
+		httpClient.Transport = transport
 	}
+	opts = append(opts, telego.WithHTTPClient(httpClient))
 
 	bot, err := telego.NewBot(cfg.Token, opts...)
 	if err != nil {
@@ -95,6 +99,7 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		BaseChannel:    base,
 		bot:            bot,
 		config:         cfg,
+		httpClient:     httpClient,
 		pairingService: pairingSvc,
 		agentStore:     agentStore,
 		teamStore:      teamStore,
@@ -203,11 +208,11 @@ func (c *Channel) StreamEnabled(isGroup bool) bool {
 }
 
 // draftTransportEnabled returns whether sendMessageDraft should be used for DM streaming.
-// Default: true (enabled). Uses stealth preview with no per-edit notifications.
-// Note: may cause "reply to deleted message" artifacts on some Telegram clients (tdesktop#10315).
+// Default: false (disabled). When enabled, uses stealth preview with no per-edit notifications,
+// but may cause "reply to deleted message" artifacts on some Telegram clients (tdesktop#10315).
 func (c *Channel) draftTransportEnabled() bool {
 	if c.config.DraftTransport == nil {
-		return true
+		return false
 	}
 	return *c.config.DraftTransport
 }

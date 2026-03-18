@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
 import { toast } from "@/stores/use-toast-store";
+import i18n from "@/i18n";
 import type { SecureCLIBinary, CLICredentialInput, CLIPreset } from "@/types/cli-credential";
 
 export type { SecureCLIBinary, CLICredentialInput, CLIPreset };
@@ -34,10 +35,13 @@ export function useCliCredentials() {
       try {
         const res = await http.post<SecureCLIBinary>("/v1/cli-credentials", input);
         await invalidate();
-        toast.success("CLI credential created", `"${input.binary_name}" added successfully.`);
+        toast.success(
+          i18n.t("cli-credentials:toast.created"),
+          i18n.t("cli-credentials:toast.createdDesc", { name: input.binary_name }),
+        );
         return res;
       } catch (err) {
-        toast.error("Failed to create credential", err instanceof Error ? err.message : "");
+        toast.error(i18n.t("cli-credentials:toast.createFailed"), err instanceof Error ? err.message : "");
         throw err;
       }
     },
@@ -49,9 +53,9 @@ export function useCliCredentials() {
       try {
         await http.put(`/v1/cli-credentials/${id}`, input);
         await invalidate();
-        toast.success("CLI credential updated");
+        toast.success(i18n.t("cli-credentials:toast.updated"));
       } catch (err) {
-        toast.error("Failed to update credential", err instanceof Error ? err.message : "");
+        toast.error(i18n.t("cli-credentials:toast.updateFailed"), err instanceof Error ? err.message : "");
         throw err;
       }
     },
@@ -63,9 +67,9 @@ export function useCliCredentials() {
       try {
         await http.delete(`/v1/cli-credentials/${id}`);
         await invalidate();
-        toast.success("CLI credential deleted");
+        toast.success(i18n.t("cli-credentials:toast.deleted"));
       } catch (err) {
-        toast.error("Failed to delete credential", err instanceof Error ? err.message : "");
+        toast.error(i18n.t("cli-credentials:toast.deleteFailed"), err instanceof Error ? err.message : "");
         throw err;
       }
     },

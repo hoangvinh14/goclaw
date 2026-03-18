@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,10 @@ type Registry struct {
 	mu          sync.RWMutex
 	rateLimiter *ToolRateLimiter // nil = no rate limiting
 	scrubbing   bool             // scrub credentials from output (default true)
+
+	// deferredActivator is called when a tool is not in the registry but may be
+	// a deferred MCP tool. Returns true if the tool was successfully activated.
+	deferredActivator func(name string) bool
 }
 
 func NewRegistry() *Registry {
@@ -25,6 +31,26 @@ func NewRegistry() *Registry {
 		aliases:   make(map[string]string),
 		scrubbing: true, // enabled by default
 	}
+}
+
+// SetDeferredActivator registers a callback that activates deferred tools on demand.
+// Used by the MCP Manager to enable lazy activation when a deferred tool is called directly.
+func (r *Registry) SetDeferredActivator(fn func(name string) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deferredActivator = fn
+}
+
+// TryActivateDeferred attempts to activate a named tool via the deferred activator.
+// Returns true if the tool is now in the registry (either already was or just activated).
+func (r *Registry) TryActivateDeferred(name string) bool {
+	r.mu.RLock()
+	fn := r.deferredActivator
+	r.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	return fn(name)
 }
 
 // SetRateLimiter enables per-key tool rate limiting.
@@ -133,6 +159,21 @@ func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map
 	if r.rateLimiter != nil && sessionKey != "" {
 		if err := r.rateLimiter.Allow(sessionKey); err != nil {
 			return ErrorResult(err.Error())
+		}
+	}
+
+	// Detect empty tool call arguments — typically caused by providers truncating
+	// or dropping arguments when output is too large (e.g. DashScope with long content).
+	// Give the model an actionable hint instead of a confusing "X is required" error.
+	if len(args) == 0 {
+		if params := tool.Parameters(); params != nil {
+			if req, ok := params["required"].([]string); ok && len(req) > 0 {
+				return ErrorResult(fmt.Sprintf(
+					"Tool call had empty arguments (required: %s). "+
+						"This usually means your previous response was too long for the API to include tool parameters. "+
+						"Try again with shorter content — split into smaller parts if needed.",
+					strings.Join(req, ", ")))
+			}
 		}
 	}
 

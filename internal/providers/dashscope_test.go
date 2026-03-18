@@ -37,7 +37,7 @@ func newDashScopeTestServer(t *testing.T) (*httptest.Server, *map[string]any) {
 func callDashScopeStream(t *testing.T, req ChatRequest) map[string]any {
 	t.Helper()
 	server, captured := newDashScopeTestServer(t)
-	p := NewDashScopeProvider("test-key", server.URL, "")
+	p := NewDashScopeProvider("dashscope-test", "test-key", server.URL, "")
 	p.retryConfig.Attempts = 1
 	p.ChatStream(context.Background(), req, nil) //nolint:errcheck
 	return *captured
@@ -45,7 +45,7 @@ func callDashScopeStream(t *testing.T, req ChatRequest) map[string]any {
 
 // TestDashScopeModelSupportsThinking verifies the whitelist is correct.
 func TestDashScopeModelSupportsThinking(t *testing.T) {
-	p := NewDashScopeProvider("key", "", "")
+	p := NewDashScopeProvider("dashscope", "key", "", "")
 
 	tests := []struct {
 		model string
@@ -109,38 +109,6 @@ func TestDashScopeThinkingNotInjected_WhenModelDoesNotSupport(t *testing.T) {
 	}
 	if _, has := body["thinking_budget"]; has {
 		t.Errorf("thinking_budget should NOT be sent for qwen3-plus, got: %v", body["thinking_budget"])
-	}
-}
-
-// TestDashScopeThinkingNotInjected_ViaHint verifies that the ModelSupportsThinking=false
-// hint suppresses injection even for a whitelisted model.
-func TestDashScopeThinkingNotInjected_ViaHint(t *testing.T) {
-	falseVal := false
-	body := callDashScopeStream(t, ChatRequest{
-		Model:                 "qwen3.5-plus", // on whitelist, but hint overrides
-		Messages:              []Message{{Role: "user", Content: "hi"}},
-		Options:               map[string]any{OptThinkingLevel: "high"},
-		ModelSupportsThinking: &falseVal,
-	})
-
-	if _, has := body["enable_thinking"]; has {
-		t.Error("enable_thinking should NOT be sent when ModelSupportsThinking=false hint is set")
-	}
-}
-
-// TestDashScopeThinkingInjected_ViaHint verifies that a true hint on a
-// non-whitelisted model still triggers injection (explicit caller override).
-func TestDashScopeThinkingInjected_ViaHint(t *testing.T) {
-	trueVal := true
-	body := callDashScopeStream(t, ChatRequest{
-		Model:                 "qwen3-plus", // not on whitelist, but hint explicitly allows
-		Messages:              []Message{{Role: "user", Content: "hi"}},
-		Options:               map[string]any{OptThinkingLevel: "low"},
-		ModelSupportsThinking: &trueVal,
-	})
-
-	if body["enable_thinking"] != true {
-		t.Errorf("enable_thinking = %v, want true when ModelSupportsThinking=true hint is set", body["enable_thinking"])
 	}
 }
 
