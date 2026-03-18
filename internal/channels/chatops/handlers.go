@@ -181,6 +181,9 @@ func (c *Channel) handlePosted(event map[string]any) {
 	}
 	if replyRootID != "" {
 		metadata["message_thread_id"] = replyRootID
+		// Store mention context for this thread so Send() can prepend @username
+		// without relying on metadata forwarding through the shared pipeline.
+		c.threadMentions.Store(replyRootID, mentionInfo{username: mmUsername, isDM: isDM})
 	}
 
 	c.HandleMessage(compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind)

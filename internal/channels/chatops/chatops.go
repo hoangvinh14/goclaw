@@ -44,6 +44,7 @@ type Channel struct {
 	pairingDebounce sync.Map // senderID -> time.Time
 	approvedGroups  sync.Map // channelID -> true
 	userCache       sync.Map // userID -> cachedUser
+	threadMentions  sync.Map // message_thread_id -> mentionInfo (for @mention on reply)
 
 	pairingService store.PairingStore
 	groupHistory   *channels.PendingHistory
@@ -58,6 +59,13 @@ type cachedUser struct {
 	displayName string
 	username    string // Mattermost login handle (e.g. "vinhngh-runsystem.net") for @mention
 	fetchedAt   time.Time
+}
+
+// mentionInfo stores the @mention context for a thread so Send() can prepend
+// the username without needing the full inbound metadata pipeline.
+type mentionInfo struct {
+	username string // Mattermost login handle for @mention
+	isDM     bool   // skip mention in DMs
 }
 
 // Compile-time interface assertions.

@@ -36,9 +36,14 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 
 	// Prepend @mention when replying in a group thread so the user
 	// receives a Mattermost notification (matching Telegram's reply_to pattern).
-	if rootID != "" && msg.Metadata["is_dm"] != "true" {
-		if mentionUser := msg.Metadata["mention_username"]; mentionUser != "" {
-			content = "@" + mentionUser + " " + content
+	// Mention info is stored locally on inbound (threadMentions) to avoid
+	// depending on metadata forwarding through the shared event pipeline.
+	if rootID != "" {
+		if v, ok := c.threadMentions.Load(rootID); ok {
+			mi := v.(mentionInfo)
+			if !mi.isDM && mi.username != "" {
+				content = "@" + mi.username + " " + content
+			}
 		}
 	}
 
