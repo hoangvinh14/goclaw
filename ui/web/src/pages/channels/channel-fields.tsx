@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -244,16 +245,11 @@ function FieldRenderer({
       return (
         <div className="grid gap-1.5">
           <Label htmlFor={id}>{label}</Label>
-          <Textarea
+          <TagsTextarea
             id={id}
-            value={Array.isArray(value) ? (value as string[]).join("\n") : ""}
-            onChange={(e) => {
-              const lines = e.target.value.split(/[\n,]/).map((l) => l.trim()).filter(Boolean);
-              onChange(lines.length > 0 ? lines : undefined);
-            }}
+            value={value}
+            onChange={onChange}
             placeholder={field.placeholder ?? t("groupOverrides.fields.allowedUsersPlaceholder")}
-            rows={3}
-            className="font-mono text-sm"
           />
           {help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
@@ -262,4 +258,73 @@ function FieldRenderer({
     default:
       return null;
   }
+}
+
+/** Convert string[] → raw newline-separated text */
+const tagsToText = (v: unknown): string =>
+  Array.isArray(v) ? (v as string[]).join("\n") : "";
+
+/** Parse raw text → trimmed, non-empty string[] */
+const parseLines = (text: string): string[] =>
+  text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+/**
+ * TagsTextarea — stores raw text locally so the user can type multiline freely,
+ * while emitting a parsed string[] to the parent on change.
+ */
+function TagsTextarea({
+  id,
+  value,
+  onChange,
+  placeholder,
+}: {
+  id: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  placeholder?: string;
+}) {
+  const [rawText, setRawText] = useState<string>(tagsToText(value));
+  // Track last value we emitted so we can distinguish external changes from our own
+  const lastEmitted = useRef<unknown>(value);
+
+  // Re-sync from parent only on external changes (e.g. form reset), not our own emissions
+  useEffect(() => {
+    if (value !== lastEmitted.current) {
+      setRawText(tagsToText(value));
+      lastEmitted.current = value;
+    }
+  }, [value]);
+
+  const emit = (text: string) => {
+    setRawText(text);
+    const lines = parseLines(text);
+    const val = lines.length > 0 ? lines : undefined;
+    lastEmitted.current = val;
+    onChange(val);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    emit(e.target.value);
+  };
+
+  // Expand commas to newlines on paste for bulk-entry support
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (text.includes(",")) {
+      e.preventDefault();
+      emit(rawText + text.replace(/,/g, "\n"));
+    }
+  };
+
+  return (
+    <Textarea
+      id={id}
+      value={rawText}
+      onChange={handleChange}
+      onPaste={handlePaste}
+      placeholder={placeholder}
+      rows={3}
+      className="font-mono text-sm"
+    />
+  );
 }
