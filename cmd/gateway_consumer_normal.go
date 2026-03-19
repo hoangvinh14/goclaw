@@ -308,7 +308,6 @@ func processNormalMessage(
 		ChatID:            msg.ChatID,
 		PeerKind:          peerKind,
 		LocalKey:          msg.Metadata["local_key"],
-		ThreadID:          msg.Metadata["message_thread_id"],
 		UserID:            userID,
 		SenderID:          msg.SenderID,
 		RunID:             runID,

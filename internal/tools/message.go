@@ -109,12 +109,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result 
 			Content: message,
 		}
 		if isGroupContext(ctx) {
-			meta := map[string]string{"group_id": target}
-			// Preserve thread context so replies stay in the originating thread.
-			if threadID := ToolThreadIDFromCtx(ctx); threadID != "" {
-				meta["message_thread_id"] = threadID
-			}
-			outMsg.Metadata = meta
+			outMsg.Metadata = map[string]string{"group_id": target}
 		}
 		t.msgBus.PublishOutbound(outMsg)
 		return SilentResult(fmt.Sprintf(`{"status":"sent","channel":"%s","target":"%s"}`, channel, target))
@@ -144,9 +139,6 @@ func (t *MessageTool) sendMedia(ctx context.Context, channel, target, filePath s
 	var meta map[string]string
 	if isGroupContext(ctx) {
 		meta = map[string]string{"group_id": target}
-		if threadID := ToolThreadIDFromCtx(ctx); threadID != "" {
-			meta["message_thread_id"] = threadID
-		}
 	}
 
 	t.msgBus.PublishOutbound(bus.OutboundMessage{

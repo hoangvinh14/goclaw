@@ -66,10 +66,6 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	if req.ChannelType != "" {
 		ctx = tools.WithToolChannelType(ctx, req.ChannelType)
 	}
-	// Inject thread ID so tools (e.g. message) can send replies in the same thread.
-	if req.ThreadID != "" {
-		ctx = tools.WithToolThreadID(ctx, req.ThreadID)
-	}
 	// Inject per-agent overrides from DB so tools honor per-agent settings.
 	if l.restrictToWs != nil {
 		ctx = tools.WithRestrictToWorkspace(ctx, *l.restrictToWs)

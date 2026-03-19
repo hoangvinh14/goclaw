@@ -357,7 +357,6 @@ type RunRequest struct {
 	HistoryLimit      int             // max user turns to keep in context (0=unlimited, from channel config)
 	ToolAllow         []string        // per-group tool allow list (nil = no restriction, supports "group:xxx")
 	LocalKey          string          // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
-	ThreadID          string          // message_thread_id for threaded replies in group chats
 	ParentTraceID     uuid.UUID       // if set, reuse parent trace instead of creating new (announce runs)
 	ParentRootSpanID  uuid.UUID       // if set, nest announce agent span under this parent span
 	LinkedTraceID     uuid.UUID       // if set, create new trace with parent_trace_id pointing to this (team task runs)
