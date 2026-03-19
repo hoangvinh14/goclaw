@@ -29,6 +29,14 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	content := msg.Content
 	rootID := msg.Metadata["message_thread_id"]
 
+	// Fallback: if no thread ID in metadata (e.g. tool-sent messages),
+	// use the last known active thread for this channel.
+	if rootID == "" {
+		if v, ok := c.activeThread.Load(channelID); ok {
+			rootID = v.(string)
+		}
+	}
+
 	// NO_REPLY: skip empty messages
 	if content == "" && len(msg.Media) == 0 {
 		return nil

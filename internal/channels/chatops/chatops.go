@@ -43,8 +43,9 @@ type Channel struct {
 
 	pairingDebounce sync.Map // senderID -> time.Time
 	approvedGroups  sync.Map // channelID -> true
-	userCache   sync.Map // userID -> cachedUser
-	memberCache sync.Map // channelID -> cachedMembers
+	userCache    sync.Map // userID -> cachedUser
+	memberCache  sync.Map // channelID -> cachedMembers
+	activeThread sync.Map // channelID -> replyRootID (fallback thread for tool-sent messages)
 
 	pairingService store.PairingStore
 	groupHistory   *channels.PendingHistory

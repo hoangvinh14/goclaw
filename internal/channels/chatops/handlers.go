@@ -187,6 +187,11 @@ func (c *Channel) handlePosted(event map[string]any) {
 	}
 	if replyRootID != "" {
 		metadata["message_thread_id"] = replyRootID
+		// Track active thread per channel so Send() can thread tool-sent
+		// messages that arrive without message_thread_id in metadata.
+		if !isDM {
+			c.activeThread.Store(channelID, replyRootID)
+		}
 	}
 
 	c.HandleMessage(compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind)
