@@ -22,7 +22,8 @@ const (
 	ctxChannelType toolContextKey = "tool_channel_type"
 	ctxChatID      toolContextKey = "tool_chat_id"
 	ctxPeerKind    toolContextKey = "tool_peer_kind"
-	ctxLocalKey    toolContextKey = "tool_local_key" // composite key with topic/thread suffix for routing
+	ctxLocalKey    toolContextKey = "tool_local_key"    // composite key with topic/thread suffix for routing
+	ctxThreadID    toolContextKey = "tool_thread_id"    // message_thread_id for threaded replies
 	ctxSandboxKey  toolContextKey = "tool_sandbox_key"
 	ctxAsyncCB     toolContextKey = "tool_async_cb"
 	ctxWorkspace   toolContextKey = "tool_workspace"
@@ -87,6 +88,16 @@ func WithToolLocalKey(ctx context.Context, localKey string) context.Context {
 
 func ToolLocalKeyFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxLocalKey).(string)
+	return v
+}
+
+// WithToolThreadID injects the message_thread_id so tools can send threaded replies.
+func WithToolThreadID(ctx context.Context, threadID string) context.Context {
+	return context.WithValue(ctx, ctxThreadID, threadID)
+}
+
+func ToolThreadIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxThreadID).(string)
 	return v
 }
 
