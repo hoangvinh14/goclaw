@@ -161,7 +161,13 @@ func (c *Channel) handlePosted(event map[string]any) {
 	// Build final content with group history context
 	finalContent := content
 	if peerKind == "group" {
-		annotated := fmt.Sprintf("[From: %s]\n%s", displayName, content)
+		// Inject channel member list so the LLM can @mention the right users
+		memberList := c.resolveChannelMembers(channelID)
+		memberTag := ""
+		if memberList != "" {
+			memberTag = fmt.Sprintf("[Group members: %s]\n", memberList)
+		}
+		annotated := fmt.Sprintf("%s[From: %s]\n%s", memberTag, displayName, content)
 		if c.historyLimit > 0 {
 			finalContent = c.groupHistory.BuildContext(localKey, annotated, c.historyLimit)
 		} else {
@@ -181,9 +187,6 @@ func (c *Channel) handlePosted(event map[string]any) {
 	}
 	if replyRootID != "" {
 		metadata["message_thread_id"] = replyRootID
-		// Store mention context for this thread so Send() can prepend @username
-		// without relying on metadata forwarding through the shared pipeline.
-		c.threadMentions.Store(replyRootID, mentionInfo{username: mmUsername, isDM: isDM})
 	}
 
 	c.HandleMessage(compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind)
@@ -223,6 +226,48 @@ func (c *Channel) resolveUser(userID string) (displayName, username string) {
 
 	c.userCache.Store(userID, cachedUser{displayName: name, username: mmUsername, fetchedAt: time.Now()})
 	return name, mmUsername
+}
+
+// resolveChannelMembers fetches and caches the channel member list (display name + @handle).
+// Uses /api/v4/users?in_channel={id} which returns user objects directly.
+// Capped at 50 members; excludes the bot itself. Cached for 1 hour.
+func (c *Channel) resolveChannelMembers(channelID string) string {
+	if v, ok := c.memberCache.Load(channelID); ok {
+		cm := v.(cachedMembers)
+		if time.Since(cm.fetchedAt) < userCacheTTL {
+			return cm.list
+		}
+	}
+
+	path := fmt.Sprintf("/api/v4/users?in_channel=%s&page=0&per_page=50&sort=status", channelID)
+	users, err := c.apiGetArray(path)
+	if err != nil {
+		slog.Debug("chatops: failed to fetch channel members", "channel_id", channelID, "error", err)
+		return ""
+	}
+
+	var parts []string
+	for _, u := range users {
+		uid, _ := u["id"].(string)
+		if uid == c.botUserID {
+			continue
+		}
+		username, _ := u["username"].(string)
+		firstName, _ := u["first_name"].(string)
+		lastName, _ := u["last_name"].(string)
+
+		name := strings.TrimSpace(firstName + " " + lastName)
+		if name == "" {
+			name = username
+		}
+		if username != "" {
+			parts = append(parts, fmt.Sprintf("%s (@%s)", name, username))
+		}
+	}
+
+	list := strings.Join(parts, ", ")
+	c.memberCache.Store(channelID, cachedMembers{list: list, fetchedAt: time.Now()})
+	return list
 }
 
 // --- Policy checks (same pattern as Slack) ---

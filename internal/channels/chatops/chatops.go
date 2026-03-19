@@ -43,8 +43,8 @@ type Channel struct {
 
 	pairingDebounce sync.Map // senderID -> time.Time
 	approvedGroups  sync.Map // channelID -> true
-	userCache       sync.Map // userID -> cachedUser
-	threadMentions  sync.Map // message_thread_id -> mentionInfo (for @mention on reply)
+	userCache   sync.Map // userID -> cachedUser
+	memberCache sync.Map // channelID -> cachedMembers
 
 	pairingService store.PairingStore
 	groupHistory   *channels.PendingHistory
@@ -61,11 +61,10 @@ type cachedUser struct {
 	fetchedAt   time.Time
 }
 
-// mentionInfo stores the @mention context for a thread so Send() can prepend
-// the username without needing the full inbound metadata pipeline.
-type mentionInfo struct {
-	username string // Mattermost login handle for @mention
-	isDM     bool   // skip mention in DMs
+// cachedMembers stores resolved channel member list for group @mention injection.
+type cachedMembers struct {
+	list      string // formatted: "Alice (@alice), Bob (@bob)"
+	fetchedAt time.Time
 }
 
 // Compile-time interface assertions.
@@ -340,6 +339,32 @@ func (c *Channel) apiGet(path string) (map[string]any, error) {
 	}
 
 	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// apiGetArray performs a GET request that returns a JSON array.
+func (c *Channel) apiGetArray(path string) ([]map[string]any, error) {
+	req, err := http.NewRequest(http.MethodGet, c.serverURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
