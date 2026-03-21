@@ -25,7 +25,7 @@ const (
 	LocaleKey contextKey = "goclaw_locale"
 	// SharedMemoryKey indicates memory should be shared (no per-user scoping).
 	SharedMemoryKey contextKey = "goclaw_shared_memory"
-	// SharedKGKey indicates KG should be shared (query by team_id, not per-user).
+	// SharedKGKey indicates KG should be shared across all users of the agent (no per-user scoping).
 	SharedKGKey contextKey = "goclaw_shared_kg"
 	// ShellDenyGroupsKey holds per-agent shell deny group overrides.
 	ShellDenyGroupsKey contextKey = "goclaw_shell_deny_groups"
@@ -127,7 +127,16 @@ func MemoryUserID(ctx context.Context) string {
 	return UserIDFromContext(ctx)
 }
 
-// WithSharedKG returns a context flagged for shared knowledge graph (query by team_id).
+// KGUserID returns the userID to use for knowledge graph operations.
+// Returns "" (agent-level scope) when shared KG is active, otherwise the per-user ID.
+func KGUserID(ctx context.Context) string {
+	if IsSharedKG(ctx) {
+		return ""
+	}
+	return UserIDFromContext(ctx)
+}
+
+// WithSharedKG returns a context flagged for shared knowledge graph (agent-level, no per-user scoping).
 func WithSharedKG(ctx context.Context) context.Context {
 	return context.WithValue(ctx, SharedKGKey, true)
 }

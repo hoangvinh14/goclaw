@@ -86,9 +86,6 @@ type ResolverDeps struct {
 
 	// Tracing store for budget enforcement queries
 	TracingStore store.TracingStore
-
-	// Memory store for extractive memory fallback
-	MemoryStore store.MemoryStore
 }
 
 // NewManagedResolver creates a ResolverFunc that builds Loops from DB agent data.
@@ -359,7 +356,6 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			ModelPricing:           deps.ModelPricing,
 			BudgetMonthlyCents:     derefInt(ag.BudgetMonthlyCents),
 			TracingStore:           deps.TracingStore,
-			MemoryStore:            deps.MemoryStore,
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)

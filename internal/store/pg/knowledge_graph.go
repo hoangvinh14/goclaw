@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"cmp"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +83,13 @@ func (s *PGKnowledgeGraphStore) GetEntity(ctx context.Context, agentID, userID, 
 func (s *PGKnowledgeGraphStore) DeleteEntity(ctx context.Context, agentID, userID, entityID string) error {
 	aid := mustParseUUID(agentID)
 	eid := mustParseUUID(entityID)
+	if store.IsSharedKG(ctx) {
+		_, err := s.db.ExecContext(ctx,
+			`DELETE FROM kg_entities WHERE id = $1 AND agent_id = $2`,
+			eid, aid,
+		)
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM kg_entities WHERE id = $1 AND agent_id = $2 AND user_id = $3`,
 		eid, aid, userID,
@@ -99,7 +108,7 @@ func (s *PGKnowledgeGraphStore) ListEntities(ctx context.Context, agentID, userI
 	where := "agent_id = $1"
 	args := []any{aid}
 	idx := 2
-	if userID != "" {
+	if !store.IsSharedKG(ctx) && userID != "" {
 		where += fmt.Sprintf(" AND user_id = $%d", idx)
 		args = append(args, userID)
 		idx++
@@ -238,14 +247,14 @@ func (s *PGKnowledgeGraphStore) vectorSearchEntities(ctx context.Context, embedd
 		args = append(args, userID)
 		idx++
 	}
-	args = append(args, vecStr, vecStr, limit)
+	args = append(args, vecStr, limit)
 	q := fmt.Sprintf(`
 		SELECT id, agent_id, user_id, external_id, name, entity_type, description,
 		       properties, source_id, confidence, created_at, updated_at,
 		       1 - (embedding <=> $%d::vector) AS score
 		FROM kg_entities
 		WHERE %s
-		ORDER BY embedding <=> $%d::vector LIMIT $%d`, idx, where, idx+1, idx+2)
+		ORDER BY embedding <=> $%d::vector LIMIT $%d`, idx, where, idx, idx+1)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -304,14 +313,9 @@ func hybridMergeEntities(ilike, vec []scoredEntity, textWeight, vectorWeight flo
 		scores[id] = entry.Score
 	}
 
-	// Sort by score descending
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if scores[results[j].ID] > scores[results[i].ID] {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
+	slices.SortFunc(results, func(a, b store.Entity) int {
+		return cmp.Compare(scores[b.ID], scores[a.ID]) // descending
+	})
 
 	return results
 }
@@ -341,6 +345,13 @@ func (s *PGKnowledgeGraphStore) UpsertRelation(ctx context.Context, relation *st
 func (s *PGKnowledgeGraphStore) DeleteRelation(ctx context.Context, agentID, userID, relationID string) error {
 	aid := mustParseUUID(agentID)
 	rid := mustParseUUID(relationID)
+	if store.IsSharedKG(ctx) {
+		_, err := s.db.ExecContext(ctx,
+			`DELETE FROM kg_relations WHERE id = $1 AND agent_id = $2`,
+			rid, aid,
+		)
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM kg_relations WHERE id = $1 AND agent_id = $2 AND user_id = $3`,
 		rid, aid, userID,
@@ -388,7 +399,7 @@ func (s *PGKnowledgeGraphStore) ListAllRelations(ctx context.Context, agentID, u
 	where := "agent_id = $1"
 	args := []any{aid}
 	idx := 2
-	if userID != "" {
+	if !store.IsSharedKG(ctx) && userID != "" {
 		where += fmt.Sprintf(" AND user_id = $%d", idx)
 		args = append(args, userID)
 		idx++
@@ -448,6 +459,33 @@ func (s *PGKnowledgeGraphStore) IngestExtraction(ctx context.Context, agentID, u
 		extIDToUUID[e.ExternalID] = actualID
 	}
 
+	// Batch-generate embeddings for all upserted entities (fire-and-forget on error).
+	if s.embProvider != nil && len(extIDToUUID) > 0 {
+		texts := make([]string, 0, len(entities))
+		ids := make([]uuid.UUID, 0, len(entities))
+		for _, e := range entities {
+			texts = append(texts, e.Name+" "+e.Description)
+			ids = append(ids, extIDToUUID[e.ExternalID])
+		}
+		embeddings, embErr := s.embProvider.Embed(ctx, texts)
+		if embErr != nil {
+			slog.Warn("kg entity embedding batch failed", "error", embErr)
+		} else {
+			for i, emb := range embeddings {
+				if len(emb) == 0 {
+					continue
+				}
+				vecStr := vectorToString(emb)
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE kg_entities SET embedding = $1::vector WHERE id = $2`,
+					vecStr, ids[i],
+				); err != nil {
+					slog.Warn("kg entity embedding update failed", "entity_id", ids[i], "error", err)
+				}
+			}
+		}
+	}
+
 	for i := range relations {
 		r := &relations[i]
 		r.AgentID = agentID
@@ -478,10 +516,19 @@ func (s *PGKnowledgeGraphStore) IngestExtraction(ctx context.Context, agentID, u
 
 func (s *PGKnowledgeGraphStore) PruneByConfidence(ctx context.Context, agentID, userID string, minConfidence float64) (int, error) {
 	aid := mustParseUUID(agentID)
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM kg_entities WHERE agent_id = $1 AND user_id = $2 AND confidence < $3`,
-		aid, userID, minConfidence,
-	)
+	var res sql.Result
+	var err error
+	if store.IsSharedKG(ctx) {
+		res, err = s.db.ExecContext(ctx,
+			`DELETE FROM kg_entities WHERE agent_id = $1 AND confidence < $2`,
+			aid, minConfidence,
+		)
+	} else {
+		res, err = s.db.ExecContext(ctx,
+			`DELETE FROM kg_entities WHERE agent_id = $1 AND user_id = $2 AND confidence < $3`,
+			aid, userID, minConfidence,
+		)
+	}
 	if err != nil {
 		return 0, err
 	}
