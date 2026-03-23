@@ -117,11 +117,18 @@ func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *
 	if task.TeamID != team.ID {
 		return ErrorResult("task does not belong to your team")
 	}
-	if task.Status != store.TeamTaskStatusStale && task.Status != store.TeamTaskStatusFailed {
-		return ErrorResult(fmt.Sprintf("retry only works on stale or failed tasks (current status: %s)", task.Status))
+	switch task.Status {
+	case store.TeamTaskStatusStale, store.TeamTaskStatusFailed, store.TeamTaskStatusCompleted:
+		// OK — can retry/reopen these statuses
+	default:
+		return ErrorResult(fmt.Sprintf("retry only works on completed, stale, or failed tasks (current status: %s)", task.Status))
 	}
 	if task.OwnerAgentID == nil {
 		return ErrorResult("task has no assignee — assign it first via update")
+	}
+	// Block retry to the lead agent — would cause self-dispatch loop.
+	if *task.OwnerAgentID == team.LeadAgentID {
+		return ErrorResult("cannot retry task assigned to the team lead — reassign to a team member first via update")
 	}
 
 	// Reset status to pending first (AssignTask only transitions from pending).
@@ -133,7 +140,7 @@ func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *
 		return ErrorResult("failed to retry task: " + err.Error())
 	}
 
-	t.manager.broadcastTeamEvent(protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
+	t.manager.broadcastTeamEvent(ctx, protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
 		TeamID:        team.ID.String(),
 		TaskID:        taskID.String(),
 		TaskNumber:    task.TaskNumber,
@@ -149,7 +156,8 @@ func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *
 	})
 
 	// Dispatch immediately (retry is an explicit action, not during a turn).
-	t.manager.dispatchTaskToAgent(ctx, task, team.ID, *task.OwnerAgentID)
+	t.manager.dispatchTaskToAgent(ctx, task, team, *task.OwnerAgentID)
 
-	return NewResult(fmt.Sprintf("Task %s retried and dispatched to %s.", taskID, t.manager.agentKeyFromID(ctx, *task.OwnerAgentID)))
+	assignee := t.manager.agentKeyFromID(ctx, *task.OwnerAgentID)
+	return NewResult(fmt.Sprintf("Task #%d \"%s\" (id: %s) retried and dispatched to %s. The assignee will receive the task with your recent comments.", task.TaskNumber, task.Subject, taskID, assignee))
 }

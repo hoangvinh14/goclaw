@@ -13,21 +13,26 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 // ResponsesHandler handles POST /v1/responses (OpenResponses protocol).
 type ResponsesHandler struct {
 	agents   *agent.Router
 	sessions store.SessionStore
-	token    string
+	postTurn tools.PostTurnProcessor
+}
+
+// SetPostTurnProcessor sets the post-turn processor for team task dispatch.
+func (h *ResponsesHandler) SetPostTurnProcessor(pt tools.PostTurnProcessor) {
+	h.postTurn = pt
 }
 
 // NewResponsesHandler creates a handler for the responses endpoint.
-func NewResponsesHandler(agents *agent.Router, sess store.SessionStore, token string) *ResponsesHandler {
+func NewResponsesHandler(agents *agent.Router, sess store.SessionStore) *ResponsesHandler {
 	return &ResponsesHandler{
 		agents:   agents,
 		sessions: sess,
-		token:    token,
 	}
 }
 
@@ -45,7 +50,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auth + RBAC check (gateway token or API key, operator required for POST)
-	auth := resolveAuth(r, h.token)
+	auth := resolveAuth(r)
 	if !auth.Authenticated {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
@@ -73,7 +78,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	agentID := extractAgentID(r, req.Model)
 	userID := extractUserID(r)
 
-	loop, err := h.agents.Get(agentID)
+	loop, err := h.agents.Get(r.Context(), agentID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"agent not found: %s"}`, agentID), http.StatusNotFound)
 		return
@@ -115,7 +120,10 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ResponsesHandler) handleNonStream(w http.ResponseWriter, r *http.Request, loop agent.Agent, runID, responseID, sessionKey, message, userID string) {
-	result, err := loop.Run(r.Context(), agent.RunRequest{
+	ctx, drainTeamDispatch := tools.InjectTeamDispatch(r.Context(), h.postTurn)
+	defer drainTeamDispatch()
+
+	result, err := loop.Run(ctx, agent.RunRequest{
 		SessionKey: sessionKey,
 		Message:    message,
 		Channel:    "http",
@@ -174,7 +182,10 @@ func (h *ResponsesHandler) handleStream(w http.ResponseWriter, r *http.Request, 
 		},
 	})
 
-	result, err := loop.Run(r.Context(), agent.RunRequest{
+	ctx, drainTeamDispatch := tools.InjectTeamDispatch(r.Context(), h.postTurn)
+	defer drainTeamDispatch()
+
+	result, err := loop.Run(ctx, agent.RunRequest{
 		SessionKey: sessionKey,
 		Message:    message,
 		Channel:    "http",

@@ -19,7 +19,6 @@ import (
 
 // OAuthHandler handles OAuth-related HTTP endpoints for web UI.
 type OAuthHandler struct {
-	token       string // gateway auth token
 	provStore   store.ProviderStore
 	secretStore store.ConfigSecretsStore
 	providerReg *providers.Registry
@@ -30,9 +29,8 @@ type OAuthHandler struct {
 }
 
 // NewOAuthHandler creates a handler for OAuth endpoints.
-func NewOAuthHandler(token string, provStore store.ProviderStore, secretStore store.ConfigSecretsStore, providerReg *providers.Registry, msgBus *bus.MessageBus) *OAuthHandler {
+func NewOAuthHandler(provStore store.ProviderStore, secretStore store.ConfigSecretsStore, providerReg *providers.Registry, msgBus *bus.MessageBus) *OAuthHandler {
 	return &OAuthHandler{
-		token:       token,
 		provStore:   provStore,
 		secretStore: secretStore,
 		providerReg: providerReg,
@@ -49,15 +47,19 @@ func (h *OAuthHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *OAuthHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth(h.token, "", next)
+	return requireAuth("", next)
 }
 
-func (h *OAuthHandler) newTokenSource() *oauth.DBTokenSource {
-	return oauth.NewDBTokenSource(h.provStore, h.secretStore, oauth.DefaultProviderName)
+func (h *OAuthHandler) newTokenSource(r *http.Request) *oauth.DBTokenSource {
+	ts := oauth.NewDBTokenSource(h.provStore, h.secretStore, oauth.DefaultProviderName)
+	if tid := store.TenantIDFromContext(r.Context()); tid != uuid.Nil {
+		ts.WithTenantID(tid)
+	}
+	return ts
 }
 
 func (h *OAuthHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	ts := h.newTokenSource()
+	ts := h.newTokenSource(r)
 	if !ts.Exists(r.Context()) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
@@ -83,7 +85,7 @@ func (h *OAuthHandler) handleStart(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 
 	// Already authenticated?
-	ts := h.newTokenSource()
+	ts := h.newTokenSource(r)
 	if ts.Exists(r.Context()) {
 		if _, err := ts.Token(); err == nil {
 			writeJSON(w, http.StatusOK, map[string]any{"status": "already_authenticated"})
@@ -191,14 +193,18 @@ func (h *OAuthHandler) handleManualCallback(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *OAuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
-	ts := h.newTokenSource()
+	ts := h.newTokenSource(r)
 	if err := ts.Delete(r.Context()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	if h.providerReg != nil {
-		h.providerReg.Unregister(oauth.DefaultProviderName)
+		tid := store.TenantIDFromContext(r.Context())
+		if tid == uuid.Nil {
+			tid = store.MasterTenantID
+		}
+		h.providerReg.UnregisterForTenant(tid, oauth.DefaultProviderName)
 	}
 
 	emitAudit(h.msgBus, r, "oauth.logout", "oauth", "openai")
@@ -207,7 +213,10 @@ func (h *OAuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // saveAndRegister persists the OAuth result to DB and registers the CodexProvider in-memory.
 func (h *OAuthHandler) saveAndRegister(ctx context.Context, tokenResp *oauth.OpenAITokenResponse) (uuid.UUID, error) {
-	ts := h.newTokenSource()
+	ts := oauth.NewDBTokenSource(h.provStore, h.secretStore, oauth.DefaultProviderName)
+	if tid := store.TenantIDFromContext(ctx); tid != uuid.Nil {
+		ts.WithTenantID(tid)
+	}
 	providerID, err := ts.SaveOAuthResult(ctx, tokenResp)
 	if err != nil {
 		return uuid.Nil, err

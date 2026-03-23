@@ -13,18 +13,24 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 // WakeHandler handles POST /v1/agents/{id}/wake — external trigger API.
 // Allows orchestrators (Paperclip, n8n, etc.) to trigger agent runs via HTTP.
 type WakeHandler struct {
-	agents *agent.Router
-	token  string
+	agents   *agent.Router
+	postTurn tools.PostTurnProcessor
+}
+
+// SetPostTurnProcessor sets the post-turn processor for team task dispatch.
+func (h *WakeHandler) SetPostTurnProcessor(pt tools.PostTurnProcessor) {
+	h.postTurn = pt
 }
 
 // NewWakeHandler creates a handler for the wake endpoint.
-func NewWakeHandler(agents *agent.Router, token string) *WakeHandler {
-	return &WakeHandler{agents: agents, token: token}
+func NewWakeHandler(agents *agent.Router) *WakeHandler {
+	return &WakeHandler{agents: agents}
 }
 
 // RegisterRoutes registers wake routes on the given mux.
@@ -55,7 +61,7 @@ func (h *WakeHandler) handleWake(w http.ResponseWriter, r *http.Request) {
 	locale := extractLocale(r)
 
 	// Auth + RBAC check (gateway token or API key, operator required for POST)
-	auth := resolveAuth(r, h.token)
+	auth := resolveAuth(r)
 	if !auth.Authenticated {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": i18n.T(locale, i18n.MsgUnauthorized)})
 		return
@@ -86,7 +92,7 @@ func (h *WakeHandler) handleWake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loop, err := h.agents.Get(agentID)
+	loop, err := h.agents.Get(r.Context(), agentID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", agentID)})
 		return
@@ -110,6 +116,9 @@ func (h *WakeHandler) handleWake(w http.ResponseWriter, r *http.Request) {
 
 	runID := uuid.NewString()
 	slog.Info("wake request", "agent", agentID, "user", userID, "session", sessionKey)
+
+	ctx, drainTeamDispatch := tools.InjectTeamDispatch(ctx, h.postTurn)
+	defer drainTeamDispatch()
 
 	result, err := loop.Run(ctx, agent.RunRequest{
 		SessionKey: sessionKey,

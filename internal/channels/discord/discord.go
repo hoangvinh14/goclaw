@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
@@ -32,10 +33,15 @@ type Channel struct {
 	approvedGroups  sync.Map // chatID → true (in-memory cache for paired groups)
 	groupHistory    *channels.PendingHistory
 	historyLimit    int
+	agentStore      store.AgentStore             // for agent key lookup (nil = writer commands disabled)
+	configPermStore store.ConfigPermissionStore   // for group file writer management (nil = writer commands disabled)
 }
 
 // New creates a new Discord channel from config.
-func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, pendingStore store.PendingMessageStore) (*Channel, error) {
+// agentStore and configPermStore are optional (nil = writer commands disabled).
+func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore,
+	agentStore store.AgentStore, configPermStore store.ConfigPermissionStore,
+	pendingStore store.PendingMessageStore) (*Channel, error) {
 	session, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("create discord session: %w", err)
@@ -60,13 +66,15 @@ func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 	}
 
 	return &Channel{
-		BaseChannel:    base,
-		session:        session,
-		config:         cfg,
-		requireMention: requireMention,
-		pairingService: pairingSvc,
-		groupHistory:   channels.MakeHistory(channels.TypeDiscord, pendingStore),
-		historyLimit:   historyLimit,
+		BaseChannel:     base,
+		session:         session,
+		config:          cfg,
+		requireMention:  requireMention,
+		pairingService:  pairingSvc,
+		groupHistory:    channels.MakeHistory(channels.TypeDiscord, pendingStore, base.TenantID()),
+		historyLimit:    historyLimit,
+		agentStore:      agentStore,
+		configPermStore: configPermStore,
 	}, nil
 }
 
@@ -102,6 +110,9 @@ func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
 func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
 	c.groupHistory.SetCompactionConfig(cfg)
 }
+
+// SetPendingHistoryTenantID propagates tenant_id to the pending history for DB operations.
+func (c *Channel) SetPendingHistoryTenantID(id uuid.UUID) { c.groupHistory.SetTenantID(id) }
 
 // Stop closes the Discord gateway connection.
 func (c *Channel) Stop(_ context.Context) error {

@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+// outsidePath returns an absolute path that is guaranteed to be outside the
+// given workspace and temp directories on any OS.  On Windows bare "/etc/..."
+// is relative (no drive letter), so we prepend the volume name of the workspace
+// to ensure filepath.IsAbs returns true.
+func outsidePath(workspace, segments string) string {
+	vol := filepath.VolumeName(workspace)
+	return filepath.Join(vol+string(filepath.Separator), segments)
+}
+
 func TestResolveMediaPath(t *testing.T) {
 	tmpDir := os.TempDir()
 
@@ -21,8 +30,13 @@ func TestResolveMediaPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Normalize paths to canonical form (resolves macOS /var/folders → /private/var/folders symlink).
+	// The resolvePath function uses filepath.EvalSymlinks, so test expectations must too.
+	testFileCanonical, _ := filepath.EvalSymlinks(testFile)
+	workspaceCanonical, _ := filepath.EvalSymlinks(workspace)
+
 	t.Run("restricted", func(t *testing.T) {
-		tool := NewMessageTool(workspace, true)
+		tool := NewMessageTool(workspaceCanonical, true)
 		ctx := context.Background()
 
 		tests := []struct {
@@ -36,8 +50,8 @@ func TestResolveMediaPath(t *testing.T) {
 			{"valid nested temp", "MEDIA:" + filepath.Join(tmpDir, "sub", "file.txt"), filepath.Join(tmpDir, "sub", "file.txt"), true},
 
 			// Workspace files allowed
-			{"workspace absolute", "MEDIA:" + testFile, testFile, true},
-			{"workspace relative", "MEDIA:docs/report.pdf", testFile, true},
+			{"workspace absolute", "MEDIA:" + testFileCanonical, testFileCanonical, true},
+			{"workspace relative", "MEDIA:docs/report.pdf", testFileCanonical, true},
 
 			// Not a MEDIA: message
 			{"no prefix", filepath.Join(tmpDir, "test.png"), "", false},
@@ -47,8 +61,8 @@ func TestResolveMediaPath(t *testing.T) {
 			{"just MEDIA", "MEDIA", "", false},
 
 			// Outside workspace + outside /tmp/ → blocked
-			{"outside workspace", "MEDIA:/etc/passwd", "", false},
-			{"traversal attack", "MEDIA:" + filepath.Join(workspace, "..", "etc", "passwd"), "", false},
+			{"outside workspace", "MEDIA:" + outsidePath(workspaceCanonical, "etc/passwd"), "", false},
+			{"traversal attack", "MEDIA:" + filepath.Join(workspaceCanonical, "..", "etc", "passwd"), "", false},
 		}
 
 		for _, tt := range tests {
@@ -64,8 +78,10 @@ func TestResolveMediaPath(t *testing.T) {
 		}
 	})
 
-	t.Run("unrestricted", func(t *testing.T) {
-		tool := NewMessageTool(workspace, false)
+	// effectiveRestrict() always returns true (multi-tenant security hardening),
+	// so even tools created with restrict=false behave as restricted.
+	t.Run("unrestricted_tool_still_restricted", func(t *testing.T) {
+		tool := NewMessageTool(workspaceCanonical, false)
 		ctx := context.Background()
 
 		tests := []struct {
@@ -73,8 +89,11 @@ func TestResolveMediaPath(t *testing.T) {
 			input  string
 			wantOK bool
 		}{
-			{"any absolute path", "MEDIA:/etc/hostname", true},
+			// Outside workspace → blocked (effectiveRestrict overrides to true)
+			{"absolute outside workspace", "MEDIA:" + outsidePath(workspaceCanonical, "etc/hostname"), false},
+			// Workspace-relative → allowed
 			{"workspace relative", "MEDIA:docs/report.pdf", true},
+			// /tmp/ → allowed (temp dir exception in restricted mode)
 			{"temp file", "MEDIA:" + filepath.Join(tmpDir, "test.png"), true},
 		}
 
@@ -91,14 +110,14 @@ func TestResolveMediaPath(t *testing.T) {
 	t.Run("context workspace override", func(t *testing.T) {
 		// Tool has no workspace, but context provides one.
 		tool := NewMessageTool("", true)
-		ctx := WithToolWorkspace(context.Background(), workspace)
+		ctx := WithToolWorkspace(context.Background(), workspaceCanonical)
 
 		got, ok := tool.resolveMediaPath(ctx, "MEDIA:docs/report.pdf")
 		if !ok {
 			t.Fatal("expected ok=true for workspace-relative path with context workspace")
 		}
-		if got != testFile {
-			t.Errorf("got %q, want %q", got, testFile)
+		if got != testFileCanonical {
+			t.Errorf("got %q, want %q", got, testFileCanonical)
 		}
 	})
 }
@@ -113,7 +132,7 @@ func TestIsInTempDir(t *testing.T) {
 		{"in tmp", filepath.Join(tmpDir, "test.png"), true},
 		{"nested in tmp", filepath.Join(tmpDir, "sub", "file.txt"), true},
 		{"tmp itself", tmpDir, false}, // only files inside, not the dir itself
-		{"outside tmp", "/etc/passwd", false},
+		{"outside tmp", outsidePath(tmpDir, "etc/passwd"), false},
 		{"relative path", "relative/path.txt", false},
 		{"traversal", filepath.Join(tmpDir, "..", "etc", "passwd"), false},
 	}

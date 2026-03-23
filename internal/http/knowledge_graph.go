@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 
 	kg "github.com/nextlevelbuilder/goclaw/internal/knowledgegraph"
@@ -12,20 +13,19 @@ import (
 type KnowledgeGraphHandler struct {
 	store       store.KnowledgeGraphStore
 	providerReg *providers.Registry
-	token       string
 }
 
 // NewKnowledgeGraphHandler creates a handler for KG management endpoints.
-func NewKnowledgeGraphHandler(s store.KnowledgeGraphStore, providerReg *providers.Registry, token string) *KnowledgeGraphHandler {
-	return &KnowledgeGraphHandler{store: s, providerReg: providerReg, token: token}
+func NewKnowledgeGraphHandler(s store.KnowledgeGraphStore, providerReg *providers.Registry) *KnowledgeGraphHandler {
+	return &KnowledgeGraphHandler{store: s, providerReg: providerReg}
 }
 
 // NewExtractor creates an Extractor from the given provider name and model.
-func (h *KnowledgeGraphHandler) NewExtractor(providerName, model string, minConfidence float64) *kg.Extractor {
+func (h *KnowledgeGraphHandler) NewExtractor(ctx context.Context, providerName, model string, minConfidence float64) *kg.Extractor {
 	if h.providerReg == nil || providerName == "" || model == "" {
 		return nil
 	}
-	p, err := h.providerReg.Get(providerName)
+	p, err := h.providerReg.Get(ctx, providerName)
 	if err != nil {
 		return nil
 	}
@@ -45,5 +45,5 @@ func (h *KnowledgeGraphHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *KnowledgeGraphHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth(h.token, "", next)
+	return requireAuth("", next)
 }

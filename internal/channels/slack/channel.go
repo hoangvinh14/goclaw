@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
@@ -122,7 +123,7 @@ func New(cfg config.SlackConfig, msgBus *bus.MessageBus, pairingSvc store.Pairin
 		config:         cfg,
 		requireMention: requireMention,
 		pairingService: pairingSvc,
-		groupHistory:   channels.MakeHistory(channels.TypeSlack, pendingStore),
+		groupHistory:   channels.MakeHistory(channels.TypeSlack, pendingStore, base.TenantID()),
 		historyLimit:   historyLimit,
 		debounceDelay:  debounceDelay,
 		threadTTL:      threadTTL,
@@ -272,6 +273,9 @@ func (c *Channel) handleEvent(evt socketmode.Event) {
 func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
 	c.groupHistory.SetCompactionConfig(cfg)
 }
+
+// SetPendingHistoryTenantID propagates tenant_id to the pending history for DB operations.
+func (c *Channel) SetPendingHistoryTenantID(id uuid.UUID) { c.groupHistory.SetTenantID(id) }
 
 // Stop gracefully shuts down the Slack channel.
 func (c *Channel) Stop(_ context.Context) error {

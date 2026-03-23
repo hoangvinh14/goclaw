@@ -14,12 +14,11 @@ import (
 // MediaServeHandler serves persisted media files by ID.
 type MediaServeHandler struct {
 	store *media.Store
-	token string
 }
 
 // NewMediaServeHandler creates a media serve handler.
-func NewMediaServeHandler(store *media.Store, token string) *MediaServeHandler {
-	return &MediaServeHandler{store: store, token: token}
+func NewMediaServeHandler(store *media.Store) *MediaServeHandler {
+	return &MediaServeHandler{store: store}
 }
 
 // RegisterRoutes registers the media serve endpoint.
@@ -29,15 +28,23 @@ func (h *MediaServeHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *MediaServeHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Accept token via Bearer header or ?token= query param (for <img src>).
-		provided := extractBearerToken(r)
-		if provided == "" {
-			provided = r.URL.Query().Get("token")
-		}
-		if !requireAuthBearer(h.token, "", provided, w, r) {
+		// Priority 1: short-lived signed file token (?ft=) — decoupled from gateway token.
+		if ft := r.URL.Query().Get("ft"); ft != "" {
+			mediaID := r.PathValue("id")
+			if VerifyFileToken(ft, "/v1/media/"+mediaID, FileSigningKey()) {
+				next(w, r)
+				return
+			}
+			http.Error(w, "invalid or expired file token", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		// Priority 2: Bearer header (API clients only).
+		provided := extractBearerToken(r)
+		authedReq, ok := requireAuthBearer("", provided, w, r)
+		if !ok {
+			return
+		}
+		next(w, authedReq)
 	}
 }
 
