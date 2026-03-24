@@ -1,6 +1,7 @@
 package chatops
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,19 +14,19 @@ import (
 // handleEvent routes WebSocket events by type.
 // Mattermost Chatops clusters relay cross-node events with a
 // "custom_websocket-event_" prefix; strip it so standard handlers match.
-func (c *Channel) handleEvent(event map[string]any) {
+func (c *Channel) handleEvent(ctx context.Context, event map[string]any) {
 	eventType, _ := event["event"].(string)
 	eventType = strings.TrimPrefix(eventType, "custom_websocket-event_")
 	switch eventType {
 	case "posted":
-		c.handlePosted(event)
+		c.handlePosted(ctx, event)
 	case "hello":
 		slog.Info("chatops: WebSocket connected (hello)")
 	}
 }
 
 // handlePosted processes a new message event from Mattermost.
-func (c *Channel) handlePosted(event map[string]any) {
+func (c *Channel) handlePosted(ctx context.Context, event map[string]any) {
 	data, _ := event["data"].(map[string]any)
 	if data == nil {
 		return
@@ -76,7 +77,7 @@ func (c *Channel) handlePosted(event map[string]any) {
 
 	// Policy check
 	if isDM {
-		if !c.checkDMPolicy(userID, channelID) {
+		if !c.checkDMPolicy(ctx,userID, channelID) {
 			return
 		}
 		if !c.IsAllowed(compoundSenderID) {
@@ -85,7 +86,7 @@ func (c *Channel) handlePosted(event map[string]any) {
 			return
 		}
 	} else {
-		if !c.checkGroupPolicy(userID, channelID) {
+		if !c.checkGroupPolicy(ctx,userID, channelID) {
 			return
 		}
 	}
@@ -277,7 +278,7 @@ func (c *Channel) resolveChannelMembers(channelID string) string {
 
 // --- Policy checks (same pattern as Slack) ---
 
-func (c *Channel) checkDMPolicy(senderID, channelID string) bool {
+func (c *Channel) checkDMPolicy(ctx context.Context, senderID, channelID string) bool {
 	switch c.dmPolicy {
 	case "disabled":
 		return false
@@ -287,7 +288,7 @@ func (c *Channel) checkDMPolicy(senderID, channelID string) bool {
 		return c.HasAllowList() && c.IsAllowed(senderID)
 	default: // "pairing"
 		if c.pairingService != nil {
-			paired, err := c.pairingService.IsPaired(senderID, c.Name())
+			paired, err := c.pairingService.IsPaired(ctx, senderID, c.Name())
 			if err != nil {
 				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
 					"sender_id", senderID, "channel", c.Name(), "error", err)
@@ -300,12 +301,12 @@ func (c *Channel) checkDMPolicy(senderID, channelID string) bool {
 		if c.HasAllowList() && c.IsAllowed(senderID) {
 			return true
 		}
-		c.sendPairingReply(senderID, channelID)
+		c.sendPairingReply(ctx,senderID, channelID)
 		return false
 	}
 }
 
-func (c *Channel) checkGroupPolicy(senderID, channelID string) bool {
+func (c *Channel) checkGroupPolicy(ctx context.Context, senderID, channelID string) bool {
 	switch c.groupPolicy {
 	case "disabled":
 		return false
@@ -325,7 +326,7 @@ func (c *Channel) checkGroupPolicy(senderID, channelID string) bool {
 		}
 		groupSenderID := fmt.Sprintf("group:%s", channelID)
 		if c.pairingService != nil {
-			paired, err := c.pairingService.IsPaired(groupSenderID, c.Name())
+			paired, err := c.pairingService.IsPaired(ctx, groupSenderID, c.Name())
 			if err != nil {
 				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
 					"group_sender", groupSenderID, "channel", c.Name(), "error", err)
@@ -336,12 +337,12 @@ func (c *Channel) checkGroupPolicy(senderID, channelID string) bool {
 				return true
 			}
 		}
-		c.sendPairingReply(groupSenderID, channelID)
+		c.sendPairingReply(ctx,groupSenderID, channelID)
 		return false
 	}
 }
 
-func (c *Channel) sendPairingReply(senderID, channelID string) {
+func (c *Channel) sendPairingReply(ctx context.Context, senderID, channelID string) {
 	if c.pairingService == nil {
 		return
 	}
@@ -352,7 +353,7 @@ func (c *Channel) sendPairingReply(senderID, channelID string) {
 		}
 	}
 
-	code, err := c.pairingService.RequestPairing(senderID, c.Name(), channelID, "default", nil)
+	code, err := c.pairingService.RequestPairing(ctx, senderID, c.Name(), channelID, "default", nil)
 	if err != nil {
 		slog.Warn("chatops: failed to request pairing code", "error", err)
 		return

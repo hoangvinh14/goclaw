@@ -112,7 +112,7 @@ func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		requireMention: requireMention,
 		blockReply:     cfg.BlockReply,
 		pairingService: pairingSvc,
-		groupHistory:   channels.MakeHistory(channels.TypeChatOps, pendingStore),
+		groupHistory:   channels.MakeHistory(channels.TypeChatOps, pendingStore, base.TenantID()),
 		historyLimit:   historyLimit,
 		dmPolicy:       dmPolicy,
 		groupPolicy:    groupPolicy,
@@ -313,7 +313,7 @@ func (c *Channel) runWSLoop(ctx context.Context, conn *websocket.Conn) bool {
 			continue
 		}
 
-		c.handleEvent(event)
+		c.handleEvent(ctx, event)
 	}
 }
 
