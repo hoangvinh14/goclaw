@@ -16,11 +16,28 @@ clean:
 version:
 	@echo $(VERSION)
 
-COMPOSE = docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.selfservice.yml
+COMPOSE_BASE = docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.selfservice.yml
+COMPOSE_EXTRA =
+ifdef WITH_BROWSER
+COMPOSE_EXTRA += -f docker-compose.browser.yml
+endif
+ifdef WITH_OTEL
+COMPOSE_EXTRA += -f docker-compose.otel.yml
+endif
+ifdef WITH_SANDBOX
+COMPOSE_EXTRA += -f docker-compose.sandbox.yml
+endif
+ifdef WITH_TAILSCALE
+COMPOSE_EXTRA += -f docker-compose.tailscale.yml
+endif
+ifdef WITH_REDIS
+COMPOSE_EXTRA += -f docker-compose.redis.yml
+endif
+COMPOSE = $(COMPOSE_BASE) $(COMPOSE_EXTRA)
 UPGRADE = docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.upgrade.yml
 
 net:
-	docker network inspect shared >/dev/null 2>&1 || docker network create shared
+	docker network inspect goclaw-net >/dev/null 2>&1 || docker network create goclaw-net
 
 version-file:
 	@echo $(VERSION) > VERSION

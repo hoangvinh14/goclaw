@@ -125,7 +125,26 @@ func runGateway() {
 		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP, cfg)
 	}
 
-	setupMemoryEmbeddings(cfg, pgStores, providerRegistry)
+	// Warn if deprecated session scope settings are configured
+	if cfg.Sessions.Scope != "" && cfg.Sessions.Scope != "per-sender" {
+		slog.Warn("sessions.scope config is deprecated and ignored — fixed to per-sender", "configured", cfg.Sessions.Scope)
+	}
+	if cfg.Sessions.DmScope != "" && cfg.Sessions.DmScope != "per-channel-peer" {
+		slog.Warn("sessions.dm_scope config is deprecated and ignored — fixed to per-channel-peer", "configured", cfg.Sessions.DmScope)
+	}
+
+	seedSystemConfigs(pgStores.SystemConfigs, pgStores.Tenants, cfg)
+	// Read back system_configs from DB and overlay onto in-memory config.
+	// This ensures runtime components read DB values via cfg.* without needing direct DB access.
+	if pgStores.SystemConfigs != nil {
+		if sysConfigs, err := pgStores.SystemConfigs.List(
+			store.WithTenantID(context.Background(), store.MasterTenantID),
+		); err == nil && len(sysConfigs) > 0 {
+			cfg.ApplySystemConfigs(sysConfigs)
+			slog.Info("system_configs applied to in-memory config", "keys", len(sysConfigs))
+		}
+	}
+	setupMemoryEmbeddings(pgStores, providerRegistry)
 
 	loadBootstrapFiles(pgStores, workspace, agentCfg)
 
@@ -354,6 +373,7 @@ func runGateway() {
 	}
 	if pgStores != nil && pgStores.Teams != nil {
 		server.SetTeamAttachmentsHandler(httpapi.NewTeamAttachmentsHandler(pgStores.Teams, workspace))
+		server.SetWorkspaceUploadHandler(httpapi.NewWorkspaceUploadHandler(pgStores.Teams, workspace, msgBus))
 	}
 	if builtinToolsH != nil {
 		server.SetBuiltinToolsHandler(builtinToolsH)
@@ -374,6 +394,32 @@ func runGateway() {
 	// Activity audit log API
 	if pgStores.Activity != nil {
 		server.SetActivityHandler(httpapi.NewActivityHandler(pgStores.Activity))
+	}
+
+	// System configs API
+	if pgStores.SystemConfigs != nil {
+		server.SetSystemConfigsHandler(httpapi.NewSystemConfigsHandler(pgStores.SystemConfigs, msgBus))
+
+		// Refresh in-memory config when system_configs change via HTTP API
+		msgBus.Subscribe(bus.TopicSystemConfigChanged, func(evt bus.Event) {
+			// Use tenant context from the request that triggered the change
+			ctx := context.Background()
+			if reqCtx, ok := evt.Payload.(context.Context); ok {
+				ctx = reqCtx
+			} else {
+				ctx = store.WithTenantID(ctx, store.MasterTenantID)
+			}
+			if sysConfigs, err := pgStores.SystemConfigs.List(ctx); err == nil && len(sysConfigs) > 0 {
+				cfg.ApplySystemConfigs(sysConfigs)
+				// Update PGMemoryStore chunk config so new documents use updated settings
+				if mem := cfg.Agents.Defaults.Memory; mem != nil {
+					if pgMem, ok := pgStores.Memory.(*pg.PGMemoryStore); ok {
+						pgMem.UpdateChunkConfig(mem.MaxChunkLen, mem.ChunkOverlap)
+					}
+				}
+				slog.Debug("system_configs refreshed to in-memory config", "keys", len(sysConfigs))
+			}
+		})
 	}
 
 	// Usage analytics API
@@ -436,7 +482,7 @@ func runGateway() {
 
 	// Register all RPC methods
 	server.SetLogTee(logTee)
-	pairingMethods, heartbeatMethods, chatMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions)
+	pairingMethods, heartbeatMethods, chatMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions, pgStores.SystemConfigs, pgStores.Tenants, pgStores.SkillTenantCfgs)
 
 	// Wire post-turn processor for team task dispatch (WS chat.send + HTTP API paths).
 	if postTurn != nil {
@@ -458,10 +504,13 @@ func runGateway() {
 	// Channel manager
 	channelMgr := channels.NewManager(msgBus)
 
-	// Wire channel sender on message tool (now that channelMgr exists)
+	// Wire channel sender + tenant checker on message tool (now that channelMgr exists)
 	if t, ok := toolsReg.Get("message"); ok {
 		if cs, ok := t.(tools.ChannelSenderAware); ok {
 			cs.SetChannelSender(channelMgr.SendToChannel)
+		}
+		if tc, ok := t.(tools.ChannelTenantCheckerAware); ok {
+			tc.SetChannelTenantChecker(channelMgr.ChannelTenantID)
 		}
 	}
 	// Wire group member lister on list_group_members tool
@@ -485,7 +534,7 @@ func runGateway() {
 		instanceLoader.RegisterFactory(channels.TypeWhatsApp, whatsapp.Factory)
 		instanceLoader.RegisterFactory(channels.TypeSlack, slackchannel.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeChatOps, chatopschannel.FactoryWithPendingStore(pgStores.PendingMessages))
-		if err := instanceLoader.LoadAll(store.WithCrossTenant(context.Background())); err != nil {
+		if err := instanceLoader.LoadAll(context.Background()); err != nil {
 			slog.Error("failed to load channel instances from DB", "error", err)
 		}
 	}
@@ -604,6 +653,7 @@ func runGateway() {
 					AgentID:  meta.LeadAgent,
 					UserID:   meta.UserID,
 					Content:  leaderContent,
+					Metadata: map[string]string{"run_kind": tools.RunKindNotification},
 				})
 			} else {
 				msgBus.PublishOutbound(bus.OutboundMessage{
@@ -646,7 +696,7 @@ func runGateway() {
 			if err != nil {
 				return
 			}
-			team, err := notifyTeamStore.GetTeam(store.WithCrossTenant(context.Background()), teamUUID)
+			team, err := notifyTeamStore.GetTeamUnscoped(context.Background(), teamUUID)
 			if err != nil || team == nil {
 				return
 			}
@@ -688,7 +738,7 @@ func runGateway() {
 			// Resolve lead agent key (needed for leader mode routing + completed-by-leader skip).
 			var leadAgentKey string
 			if notifyAgentStore != nil {
-				if la, err := notifyAgentStore.GetByID(store.WithCrossTenant(context.Background()), team.LeadAgentID); err == nil {
+				if la, err := notifyAgentStore.GetByIDUnscoped(context.Background(), team.LeadAgentID); err == nil {
 					leadAgentKey = la.AgentKey
 				}
 			}
@@ -1058,6 +1108,14 @@ func runGateway() {
 	// Phase 1: suggest localhost binding when Tailscale is active
 	if cfg.Tailscale.Hostname != "" && cfg.Gateway.Host == "0.0.0.0" {
 		slog.Info("Tailscale enabled. Consider setting GOCLAW_HOST=127.0.0.1 for localhost-only + Tailscale access")
+	}
+
+	// Security warnings
+	if strings.Contains(cfg.Database.PostgresDSN, ":goclaw@") {
+		slog.Warn("security.default_db_password: using default Postgres password — run ./prepare-env.sh to generate a strong one")
+	}
+	if len(cfg.Gateway.AllowedOrigins) == 0 {
+		slog.Warn("security.cors_open: no allowed_origins configured — all WebSocket origins accepted. Set gateway.allowed_origins for production")
 	}
 
 	if err := server.Start(ctx); err != nil {
