@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAgentDetail } from "../hooks/use-agent-detail";
@@ -23,6 +24,7 @@ interface AgentDetailPageProps {
 
 export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
   const { t } = useTranslation("agents");
+  const navigate = useNavigate();
   const { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, resummonAgent, refresh } =
     useAgentDetail(agentId);
   const { deleteAgent: deleteAgentById } = useAgents();
@@ -78,7 +80,13 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
             </TabsList>
 
             <TabsContent value="agent" className="mt-4">
-              <AgentOverviewTab key={agent.id + "-" + agent.updated_at} agent={agent} onUpdate={updateAgent} heartbeat={hb} />
+              <AgentOverviewTab
+                key={agent.id + "-" + agent.updated_at}
+                agent={agent}
+                onUpdate={updateAgent}
+                heartbeat={hb}
+                onManageCodexPool={() => navigate(`/agents/${agent.id}/codex-pool`)}
+              />
             </TabsContent>
 
             <TabsContent value="files" className="mt-4">
@@ -105,13 +113,15 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
         </div>
       </div>
 
-      <AgentAdvancedDialog
-        key={agent.id}
-        open={advancedOpen}
-        onOpenChange={setAdvancedOpen}
-        agent={agent}
-        onUpdate={updateAgent}
-      />
+      {advancedOpen ? (
+        <AgentAdvancedDialog
+          key={agent.id}
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          agent={agent}
+          onUpdate={updateAgent}
+        />
+      ) : null}
 
       <SummoningModal
         open={summoningOpen}

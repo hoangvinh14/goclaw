@@ -96,6 +96,7 @@ const (
 
 	// --- Channels ---
 	MsgCannotDeleteDefaultInst  = "error.cannot_delete_default_inst"  // "cannot delete default channel instance"
+	MsgCannotRemoveLastWriter   = "error.cannot_remove_last_writer"   // "cannot remove the last file writer"
 
 	// --- Skills ---
 	MsgSkillsUpdateNotSupported = "error.skills_update_not_supported" // "skills.update not supported for file-based skills"

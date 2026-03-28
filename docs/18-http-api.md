@@ -138,6 +138,82 @@ POST /v1/agents/{id}/wake
 
 Response: `{content, run_id, usage?}`. Used by orchestrators (n8n, Paperclip) to trigger agent runs.
 
+### Codex/OpenAI OAuth Routing in `other_config`
+
+For agents whose main `provider` is a `chatgpt_oauth` provider, `other_config.chatgpt_oauth_routing`
+can override or inherit routing behavior while keeping the main `provider` field as the preferred/default account alias.
+
+```json
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.4",
+  "other_config": {
+    "chatgpt_oauth_routing": {
+      "override_mode": "custom",
+      "strategy": "round_robin"
+    }
+  }
+}
+```
+
+Rules:
+- Provider settings may define reusable `settings.codex_pool` defaults for a primary alias.
+- `settings.codex_pool.extra_provider_names` is the authoritative membership list for that pool owner.
+- A provider listed in another pool cannot also manage its own pool.
+- `override_mode: "inherit"` tells the agent to follow those provider defaults.
+- `override_mode: "custom"` stores an agent-local routing override for that provider-owned pool.
+- `strategy: "primary_first"` keeps the main `provider` as the preferred account. When saved as a custom override with no extra names, it disables pooling for that agent.
+- Provider aliases are arbitrary. `openai-codex`, `codex-work`, and `codex-team` are examples, not required prefixes.
+- `strategy: "round_robin"` rotates requests across the main provider plus the provider-owned extra authenticated OpenAI Codex OAuth providers.
+- `strategy: "priority_order"` tries the main provider first, then drains the provider-owned extra providers in order.
+- Retryable upstream failures can fall through to the next eligible OpenAI Codex OAuth provider in the same request.
+- Only enabled and authenticated `chatgpt_oauth` providers participate.
+- Provider-scoped auth remains unchanged: `cmd/auth` and `/v1/auth/chatgpt/{provider}/*` still operate on explicit providers.
+
+Provider-level defaults example:
+
+```json
+{
+  "name": "openai-codex",
+  "provider_type": "chatgpt_oauth",
+  "settings": {
+    "codex_pool": {
+      "strategy": "round_robin",
+      "extra_provider_names": ["codex-work", "codex-team"]
+    }
+  }
+}
+```
+
+### Codex Pool Activity
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/agents/{id}/codex-pool-activity` | Summarize recent Codex/OpenAI OAuth pool usage for one agent |
+
+Query parameters:
+- `limit` optional, defaults to `18`, max `50`
+
+Response fields:
+- `strategy`: effective routing strategy (`primary_first`, `round_robin`, or `priority_order`)
+- `pool_providers`: configured primary + extra provider aliases in pool order
+- `stats_sample_size`: number of recent routed `llm_call` spans used to derive runtime health. The server derives health from `max(limit, 120)` recent spans even when `recent_requests` is still capped by the requested `limit`.
+- `provider_counts`: per-alias routing evidence:
+  - `request_count`: backward-compatible count of direct selections
+  - `direct_selection_count`: times the router selected that alias first
+  - `failover_serve_count`: times that alias only served as failover
+  - `success_count`, `failure_count`: trace-backed runtime outcomes attributed to that alias. Success is attributed to the alias that actually served the request. On successful failover, earlier attempted aliases receive failures. On terminal error, every attempted alias receives a failure.
+  - `consecutive_failures`: current newest-first failure streak from recent trace evidence
+  - `success_rate`, `health_score`, `health_state`: additive runtime health summary. `health_score` is heuristic, but the stable bands are `idle` when there are no recent outcomes, `critical` at 3+ consecutive failures or score `< 40`, `degraded` below `80`, otherwise `healthy`
+  - `last_selected_at`, `last_failover_at`, `last_used_at`, `last_success_at`, `last_failure_at`: latest timestamps for each evidence type
+- `recent_requests`: recent routed Codex calls:
+  - `span_id`, `trace_id`, `started_at`, `status`, `duration_ms`, `model`
+  - `selected_provider`: alias chosen first by the router
+  - `provider_name`: alias that actually served the request. This can be empty on terminal failures where no alias completed the call.
+  - `attempt_count`, `used_failover`, `failover_providers`
+
+Use `direct_selection_count` plus the `selected_provider` sequence to verify real round-robin behavior. A provider with `failover_serve_count > 0` and `direct_selection_count = 0` was only observed as a rescue target, not as a confirmed round-robin selection.
+
 ---
 
 ## 5. Skills
@@ -652,10 +728,86 @@ Admin-only endpoints for managing gateway API keys. See [20 — API Keys & Auth]
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/v1/auth/chatgpt/{provider}/status` | Check ChatGPT OAuth status for a provider |
+| `GET` | `/v1/auth/chatgpt/{provider}/quota` | Fetch Codex/OpenAI quota state for a provider |
+| `POST` | `/v1/auth/chatgpt/{provider}/start` | Start ChatGPT OAuth flow for a provider |
+| `POST` | `/v1/auth/chatgpt/{provider}/callback` | Manual callback handler for a provider |
+| `POST` | `/v1/auth/chatgpt/{provider}/logout` | Revoke ChatGPT OAuth token for a provider |
 | `GET` | `/v1/auth/openai/status` | Check OpenAI auth status |
+| `GET` | `/v1/auth/openai/quota` | Fetch quota state for the default `openai-codex` provider |
 | `POST` | `/v1/auth/openai/start` | Start OAuth flow |
 | `POST` | `/v1/auth/openai/callback` | Manual callback handler |
 | `POST` | `/v1/auth/openai/logout` | Revoke token |
+
+Legacy `/v1/auth/openai/*` routes remain as compatibility aliases for the default `openai-codex` OpenAI Codex OAuth provider.
+
+### Provider Quota Response
+
+`GET /v1/auth/chatgpt/{provider}/quota` and `GET /v1/auth/openai/quota` always return a provider-scoped quota envelope.
+
+Success payload:
+
+```json
+{
+  "provider_name": "openai-codex",
+  "success": true,
+  "plan_type": "team",
+  "windows": [
+    {
+      "label": "Primary",
+      "used_percent": 24,
+      "remaining_percent": 76,
+      "reset_after_seconds": 3600,
+      "reset_at": "2026-03-24T20:15:00Z"
+    },
+    {
+      "label": "Secondary",
+      "used_percent": 38,
+      "remaining_percent": 62,
+      "reset_after_seconds": 604800,
+      "reset_at": "2026-03-31T19:15:00Z"
+    }
+  ],
+  "core_usage": {
+    "five_hour": {
+      "label": "Primary",
+      "remaining_percent": 76,
+      "reset_after_seconds": 3600,
+      "reset_at": "2026-03-24T20:15:00Z"
+    },
+    "weekly": {
+      "label": "Secondary",
+      "remaining_percent": 62,
+      "reset_after_seconds": 604800,
+      "reset_at": "2026-03-31T19:15:00Z"
+    }
+  },
+  "last_updated": "2026-03-24T19:15:00Z"
+}
+```
+
+Failure payload:
+
+```json
+{
+  "provider_name": "openai-codex",
+  "success": false,
+  "windows": [],
+  "error": "Quota metadata is missing for this account.",
+  "error_code": "missing_account_id",
+  "action_hint": "Sign in again so GoClaw can restore the ChatGPT account workspace metadata.",
+  "last_updated": "2026-03-24T19:15:00Z"
+}
+```
+
+Notes:
+- Invalid provider slugs return `400`.
+- Missing provider still returns `404`, and provider type conflicts still return `409`.
+- Missing quota metadata, expired workspace access, upstream `402`, upstream `403`, and upstream `429` return `200` with a structured failure payload so the dashboard can render actionable state inline.
+- `needs_reauth`, `is_forbidden`, and `retryable` are boolean hints for UI/state-machine handling.
+- `error_code` can be `missing_account_id`, `reauth_required`, `payment_required`, `quota_api_forbidden`, `quota_endpoint_not_found`, `rate_limited`, `provider_unavailable`, `network_timeout`, `network_error`, `quota_request_failed`, or `unknown_upstream_error`.
+- Failure payloads still include `windows: []` so clients can treat the envelope consistently.
+- `core_usage.five_hour` and `core_usage.weekly` are derived from upstream windows. When labels drift, GoClaw falls back to shortest-reset and longest-reset usage windows.
 
 ---
 

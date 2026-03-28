@@ -9,6 +9,7 @@ import { ModelBudgetSection } from "./overview-sections/model-budget-section";
 import { SkillsSection } from "./overview-sections/skills-section";
 import { EvolutionSection } from "./overview-sections/evolution-section";
 import { CapabilitiesSection } from "./overview-sections/capabilities-section";
+import { ChatGPTOAuthRoutingSummarySection } from "./overview-sections/chatgpt-oauth-routing-summary-section";
 import { HeartbeatCard } from "./overview-sections/heartbeat-card";
 import { MemorySection } from "./config-sections";
 import type { UseAgentHeartbeatReturn } from "../hooks/use-agent-heartbeat";
@@ -17,9 +18,10 @@ interface AgentOverviewTabProps {
   agent: AgentData;
   onUpdate: (updates: Record<string, unknown>) => Promise<void>;
   heartbeat: UseAgentHeartbeatReturn;
+  onManageCodexPool: () => void;
 }
 
-export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTabProps) {
+export function AgentOverviewTab({ agent, onUpdate, heartbeat, onManageCodexPool }: AgentOverviewTabProps) {
   const { t } = useTranslation("agents");
 
   const otherCfg = (agent.other_config ?? {}) as Record<string, unknown>;
@@ -125,6 +127,8 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
         onBudgetDollarsChange={setBudgetDollars}
         onSaveBlockedChange={setLlmSaveBlocked}
       />
+
+      <ChatGPTOAuthRoutingSummarySection agent={agent} onManage={onManageCodexPool} />
 
       {/* Memory — always visible, per-agent overrides */}
       <MemorySection

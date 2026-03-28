@@ -77,6 +77,25 @@ export interface WorkspaceSharingConfig {
   share_memory?: boolean;
 }
 
+export type ChatGPTOAuthRoutingStrategy =
+  | "manual"
+  | "primary_first"
+  | "round_robin"
+  | "priority_order";
+
+export type EffectiveChatGPTOAuthRoutingStrategy =
+  | "primary_first"
+  | "round_robin"
+  | "priority_order";
+
+export type ChatGPTOAuthRoutingOverrideMode = "inherit" | "custom";
+
+export interface ChatGPTOAuthRoutingConfig {
+  override_mode?: ChatGPTOAuthRoutingOverrideMode;
+  strategy?: ChatGPTOAuthRoutingStrategy;
+  extra_provider_names?: string[];
+}
+
 export interface AgentData {
   id: string;
   agent_key: string;

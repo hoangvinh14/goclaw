@@ -37,6 +37,16 @@ export function ChannelFields({ fields, values, onChange, idPrefix, isEdit, cont
           const depValue = allValues[field.showWhen.key] ?? fields.find((f) => f.key === field.showWhen!.key)?.defaultValue;
           if (String(depValue) !== field.showWhen.value) return null;
         }
+        // Check disabledWhen condition
+        let disabled = false;
+        let disabledHint: string | undefined;
+        if (field.disabledWhen) {
+          const depValue = allValues[field.disabledWhen.key] ?? fields.find((f) => f.key === field.disabledWhen!.key)?.defaultValue;
+          if (String(depValue) === field.disabledWhen.value) {
+            disabled = true;
+            disabledHint = field.disabledWhen.hint;
+          }
+        }
         return (
           <FieldRenderer
             key={field.key}
@@ -45,6 +55,8 @@ export function ChannelFields({ fields, values, onChange, idPrefix, isEdit, cont
             onChange={(v) => onChange(field.key, v)}
             id={`${idPrefix}-${field.key}`}
             isEdit={isEdit}
+            disabled={disabled}
+            disabledHint={disabledHint}
           />
         );
       })}
@@ -58,17 +70,22 @@ function FieldRenderer({
   onChange,
   id,
   isEdit,
+  disabled,
+  disabledHint,
 }: {
   field: FieldDef;
   value: unknown;
   onChange: (v: unknown) => void;
   id: string;
   isEdit?: boolean;
+  disabled?: boolean;
+  disabledHint?: string;
 }) {
   const { t } = useTranslation("channels");
   // i18n: try "fieldConfig.<key>.label" / "fieldConfig.<key>.help", fall back to hardcoded schema string
   const label = t(`fieldConfig.${field.key}.label`, { defaultValue: field.label });
   const help = field.help ? t(`fieldConfig.${field.key}.help`, { defaultValue: field.help }) : "";
+  const resolvedHint = disabledHint ? t(disabledHint, { defaultValue: disabledHint }) : undefined;
   const labelSuffix = field.required && !isEdit ? " *" : "";
   const editHint = isEdit && field.type === "password" ? ` ${t("form.credentialsHint")}` : "";
 
@@ -108,14 +125,16 @@ function FieldRenderer({
 
     case "boolean":
       return (
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2${disabled ? " opacity-50" : ""}`}>
           <Switch
             id={id}
             checked={(value as boolean) ?? (field.defaultValue as boolean) ?? false}
             onCheckedChange={(v) => onChange(v)}
+            disabled={disabled}
           />
           <Label htmlFor={id}>{label}</Label>
-          {help && <span className="text-xs text-muted-foreground ml-1">— {help}</span>}
+          {resolvedHint && <span className="text-xs text-muted-foreground ml-1">— {resolvedHint}</span>}
+          {!resolvedHint && help && <span className="text-xs text-muted-foreground ml-1">— {help}</span>}
         </div>
       );
 
@@ -193,9 +212,9 @@ function FieldRenderer({
       };
 
       return (
-        <div className="grid gap-1.5">
+        <div className={`grid gap-1.5${disabled ? " opacity-50" : ""}`}>
           <Label>{label}</Label>
-          <Select value={boolToStr(value)} onValueChange={(v) => onChange(strToBool(v))}>
+          <Select value={boolToStr(value)} onValueChange={(v) => onChange(strToBool(v))} disabled={disabled}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -205,7 +224,8 @@ function FieldRenderer({
               ))}
             </SelectContent>
           </Select>
-          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+          {resolvedHint && <p className="text-xs text-muted-foreground">{resolvedHint}</p>}
+          {!resolvedHint && help && <p className="text-xs text-muted-foreground">{help}</p>}
         </div>
       );
     }

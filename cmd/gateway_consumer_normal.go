@@ -336,6 +336,7 @@ func processNormalMessage(
 		ForwardMedia:      fwdMedia,
 		Channel:           msg.Channel,
 		ChannelType:       resolveChannelType(channelMgr, msg.Channel),
+		ChatTitle:         msg.Metadata["chat_title"],
 		ChatID:            msg.ChatID,
 		PeerKind:          peerKind,
 		LocalKey:          msg.Metadata["local_key"],

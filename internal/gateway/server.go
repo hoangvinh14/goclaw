@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -224,8 +225,10 @@ func bridgeContextMiddleware(gatewayToken string, next http.Handler) http.Handle
 			}
 
 			// Verify HMAC signature over all context fields.
+			tenantIDStr := r.Header.Get("X-Tenant-ID")
 			sig := r.Header.Get("X-Bridge-Sig")
-			if !providers.VerifyBridgeContext(gatewayToken, agentIDStr, userID, channel, chatID, peerKind, workspace, sig) {
+			ok, tenantVerified := providers.VerifyBridgeContext(gatewayToken, agentIDStr, userID, channel, chatID, peerKind, workspace, tenantIDStr, sig)
+			if !ok {
 				slog.Warn("security.mcp_bridge: invalid bridge context signature",
 					"agent_id", agentIDStr, "user_id", userID)
 				http.Error(w, `{"error":"invalid bridge context signature"}`, http.StatusForbidden)
@@ -239,6 +242,13 @@ func bridgeContextMiddleware(gatewayToken string, next http.Handler) http.Handle
 			}
 			if userID != "" {
 				ctx = store.WithUserID(ctx, userID)
+			}
+			// Only inject tenant_id when HMAC actually covers it (level 1).
+			// Fallback levels (pre-tenantID sessions) must not trust unsigned tenant headers.
+			if tenantVerified && tenantIDStr != "" {
+				if tid, err := uuid.Parse(tenantIDStr); err == nil {
+					ctx = store.WithTenantID(ctx, tid)
+				}
 			}
 		}
 
@@ -279,10 +289,16 @@ func tokenAuthMiddleware(token string, next http.Handler) http.Handler {
 func (s *Server) Start(ctx context.Context) error {
 	mux := s.BuildMux()
 
+	// Wrap with CORS for desktop dev mode (Wails serves frontend on different port).
+	var handler http.Handler = mux
+	if os.Getenv("GOCLAW_DESKTOP") == "1" {
+		handler = desktopCORS(mux)
+	}
+
 	addr := fmt.Sprintf("%s:%d", s.cfg.Gateway.Host, s.cfg.Gateway.Port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	slog.Info("gateway starting", "addr", addr)
@@ -469,6 +485,9 @@ func (s *Server) SetUsageHandler(h *httpapi.UsageHandler) { s.handlers = append(
 // SetDocsHandler sets the OpenAPI spec + Swagger UI handler.
 func (s *Server) SetDocsHandler(h *httpapi.DocsHandler) { s.handlers = append(s.handlers, h) }
 
+// SetEditionHandler sets the edition info handler.
+func (s *Server) SetEditionHandler(h *httpapi.EditionHandler) { s.handlers = append(s.handlers, h) }
+
 // SetAgentStore sets the agent store for context injection in tools_invoke.
 func (s *Server) SetAgentStore(as store.AgentStore) { s.agentStore = as }
 
@@ -611,4 +630,19 @@ func StartTestServer(s *Server, ctx context.Context) (addr string, start func())
 	}
 
 	return addr, start
+}
+
+// desktopCORS wraps a handler with permissive CORS headers for desktop dev mode.
+// Only active when GOCLAW_DESKTOP=1 (set by desktop app.go).
+func desktopCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-GoClaw-Tenant-Id, X-GoClaw-User-Id")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

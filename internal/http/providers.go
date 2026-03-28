@@ -9,8 +9,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -21,10 +23,10 @@ type ProvidersHandler struct {
 	store           store.ProviderStore
 	secretStore     store.ConfigSecretsStore
 	providerReg     *providers.Registry
-	gatewayAddr     string                         // for injecting MCP bridge into Claude CLI providers
-	mcpLookup       providers.MCPServerLookup       // optional: resolves per-agent MCP servers
+	gatewayAddr     string                           // for injecting MCP bridge into Claude CLI providers
+	mcpLookup       providers.MCPServerLookup        // optional: resolves per-agent MCP servers
 	apiBaseFallback func(providerType string) string // optional: config/env fallback for api_base
-	cliMu           sync.Mutex                      // serializes Claude CLI provider create to prevent duplicates
+	cliMu           sync.Mutex                       // serializes Claude CLI provider create to prevent duplicates
 	msgBus          *bus.MessageBus
 	sysConfigStore  store.SystemConfigStore
 }
@@ -104,7 +106,7 @@ func (h *ProvidersHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *ProvidersHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth("", next)
+	return requireAuth(permissions.RoleAdmin, next)
 }
 
 // maskAPIKey replaces non-empty API keys with "***".
@@ -141,6 +143,16 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 		h.providerReg.RegisterForTenant(p.TenantID, providers.NewClaudeCLIProvider(cliPath, cliOpts...))
 		return
 	}
+	// Ollama doesn't need an API key — handle before the key guard (same as startup).
+	// In Docker, swap localhost → host.docker.internal so the container can reach the host.
+	if p.ProviderType == store.ProviderOllama {
+		host := p.APIBase
+		if host == "" {
+			host = "http://localhost:11434"
+		}
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, "ollama", config.DockerLocalhost(host+"/v1"), "llama3.3"))
+		return
+	}
 	if p.APIKey == "" {
 		return
 	}
@@ -148,7 +160,11 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 	switch p.ProviderType {
 	case store.ProviderChatGPTOAuth:
 		ts := oauth.NewDBTokenSource(h.store, h.secretStore, p.Name).WithTenantID(p.TenantID)
-		h.providerReg.RegisterForTenant(p.TenantID, providers.NewCodexProvider(p.Name, ts, apiBase, ""))
+		codex := providers.NewCodexProvider(p.Name, ts, apiBase, "")
+		if oauthSettings := store.ParseChatGPTOAuthProviderSettings(p.Settings); oauthSettings != nil {
+			codex.WithRoutingDefaults(oauthSettings.CodexPool.Strategy, oauthSettings.CodexPool.ExtraProviderNames)
+		}
+		h.providerReg.RegisterForTenant(p.TenantID, codex)
 	case store.ProviderAnthropicNative:
 		h.providerReg.RegisterForTenant(p.TenantID, providers.NewAnthropicProvider(p.APIKey,
 			providers.WithAnthropicBaseURL(apiBase)))
@@ -223,6 +239,11 @@ func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.R
 				return
 			}
 		}
+	}
+
+	if err := validateChatGPTOAuthProviderCandidate(r.Context(), h.store, uuid.Nil, &p); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	if err := h.store.CreateProvider(r.Context(), &p); err != nil {
@@ -301,12 +322,49 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 	// Allowlist: only permit known provider columns.
 	updates = filterAllowedKeys(updates, providerAllowedFields)
 
+	currentProvider, err := h.store.GetProvider(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "provider", id.String())})
+		return
+	}
+
+	candidate := *currentProvider
+	if name, ok := updates["name"].(string); ok && name != "" {
+		candidate.Name = name
+	}
+	if providerType, ok := updates["provider_type"].(string); ok && providerType != "" {
+		candidate.ProviderType = providerType
+	}
+	if apiKey, ok := updates["api_key"].(string); ok {
+		candidate.APIKey = apiKey
+	}
+	if apiBase, ok := updates["api_base"].(string); ok {
+		candidate.APIBase = apiBase
+	}
+	if enabled, ok := updates["enabled"].(bool); ok {
+		candidate.Enabled = enabled
+	}
+	if displayName, ok := updates["display_name"].(string); ok {
+		candidate.DisplayName = displayName
+	}
+	if settings, ok := updates["settings"]; ok {
+		rawSettings, err := marshalJSONRaw(settings)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
+			return
+		}
+		candidate.Settings = rawSettings
+	}
+
+	if err := validateChatGPTOAuthProviderCandidate(r.Context(), h.store, id, &candidate); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	// Track old name before update for registry cleanup
 	var oldName string
 	if h.providerReg != nil {
-		if old, err := h.store.GetProvider(r.Context(), id); err == nil {
-			oldName = old.Name
-		}
+		oldName = currentProvider.Name
 	}
 
 	if err := h.store.UpdateProvider(r.Context(), id, updates); err != nil {

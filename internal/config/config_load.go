@@ -186,6 +186,8 @@ func (c *Config) applyEnvOverrides() {
 	// Database
 	envStr("GOCLAW_POSTGRES_DSN", &c.Database.PostgresDSN)
 	envStr("GOCLAW_REDIS_DSN", &c.Database.RedisDSN)
+	envStr("GOCLAW_STORAGE_BACKEND", &c.Database.StorageBackend)
+	envStr("GOCLAW_SQLITE_PATH", &c.Database.SQLitePath)
 
 	// Deprecation warning for GOCLAW_MODE (removed — PostgreSQL is always active)
 	if v := os.Getenv("GOCLAW_MODE"); v != "" {
@@ -206,7 +208,7 @@ func (c *Config) applyEnvOverrides() {
 	// Owner IDs from env (comma-separated, whitespace-trimmed)
 	if v := os.Getenv("GOCLAW_OWNER_IDS"); v != "" {
 		var ids []string
-		for _, id := range strings.Split(v, ",") {
+		for id := range strings.SplitSeq(v, ",") {
 			if trimmed := strings.TrimSpace(id); trimmed != "" {
 				ids = append(ids, trimmed)
 			}

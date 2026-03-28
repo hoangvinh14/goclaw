@@ -1,0 +1,116 @@
+//go:build sqlite || sqliteonly
+
+package sqlitestore
+
+import (
+	"database/sql"
+	_ "embed"
+	"fmt"
+	"log/slog"
+)
+
+//go:embed schema.sql
+var schemaSQL string
+
+// SchemaVersion is the current SQLite schema version.
+// Bump this when adding new migration steps below.
+const SchemaVersion = 1
+
+// migrations maps version → SQL to apply when upgrading FROM that version.
+// schema.sql always represents the LATEST full schema (for fresh DBs).
+// Existing DBs are patched incrementally via these steps.
+//
+// Example: to add a new column in the future:
+//
+//	var migrations = map[int]string{
+//	    1: `ALTER TABLE agents ADD COLUMN new_col TEXT DEFAULT '';`,
+//	}
+//
+// Then bump SchemaVersion to 2.
+var migrations = map[int]string{
+	// Version 1 is the initial schema — no patch needed (schema.sql covers it).
+}
+
+// EnsureSchema creates tables if they don't exist and applies incremental migrations.
+//
+// Flow:
+//  1. Fresh DB (no schema_version row) → apply full schema.sql + set version = SchemaVersion
+//  2. Existing DB with version < SchemaVersion → apply patches sequentially
+//  3. Existing DB with version == SchemaVersion → no-op
+//  4. Always: seed master tenant (idempotent)
+func EnsureSchema(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+		version INTEGER NOT NULL PRIMARY KEY
+	)`); err != nil {
+		return fmt.Errorf("create schema_version: %w", err)
+	}
+
+	var current int
+	err := db.QueryRow("SELECT version FROM schema_version LIMIT 1").Scan(&current)
+	if err == sql.ErrNoRows {
+		// Fresh database — apply full schema.
+		slog.Info("sqlite: applying initial schema", "version", SchemaVersion)
+		tx, txErr := db.Begin()
+		if txErr != nil {
+			return fmt.Errorf("begin schema tx: %w", txErr)
+		}
+		if _, err := tx.Exec(schemaSQL); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("apply schema: %w", err)
+		}
+		if _, err := tx.Exec("INSERT INTO schema_version (version) VALUES (?)", SchemaVersion); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("set schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit schema tx: %w", err)
+		}
+		return seedMasterTenant(db)
+	}
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	// Apply incremental migrations for existing DBs.
+	if current < SchemaVersion {
+		slog.Info("sqlite: migrating schema", "from", current, "to", SchemaVersion)
+		for v := current; v < SchemaVersion; v++ {
+			patch, ok := migrations[v]
+			if !ok {
+				return fmt.Errorf("sqlite: missing migration for version %d → %d", v, v+1)
+			}
+			tx, txErr := db.Begin()
+			if txErr != nil {
+				return fmt.Errorf("begin migration tx v%d: %w", v, txErr)
+			}
+			if _, err := tx.Exec(patch); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("apply migration v%d: %w", v, err)
+			}
+			if _, err := tx.Exec(
+				"UPDATE schema_version SET version = ? WHERE version = ?", v+1, v,
+			); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("update schema version v%d: %w", v, err)
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit migration v%d: %w", v, err)
+			}
+			slog.Info("sqlite: applied migration", "version", v+1)
+		}
+	}
+
+	return seedMasterTenant(db)
+}
+
+// seedMasterTenant ensures the master tenant row exists (idempotent).
+func seedMasterTenant(db *sql.DB) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO tenants (id, name, slug, status) VALUES (?, 'Master', 'master', 'active')`,
+		"0193a5b0-7000-7000-8000-000000000001",
+	)
+	if err != nil {
+		slog.Warn("sqlite: seed master tenant failed", "error", err)
+	}
+	return nil
+}

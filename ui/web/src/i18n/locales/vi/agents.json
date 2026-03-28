@@ -124,6 +124,253 @@
     "saved": "Đã lưu",
     "failedToSave": "Lưu thất bại"
   },
+  "chatgptOAuthRouting": {
+    "title": "Pool Codex OAuth",
+    "description": "Chỉnh pool đã lưu rồi kiểm tra trực tiếp.",
+    "defaultAccount": "Tài khoản chính",
+    "defaultHint": "Trường Provider của agent luôn ghim vào bí danh chính.",
+    "badge": "Pool Codex",
+    "badgeTooltip": "Agent này có thể định tuyến lưu lượng Codex qua nhiều bí danh OpenAI OAuth.",
+    "summaryTitle": "Pool tài khoản OpenAI",
+    "summaryDescription": "Xem pool OpenAI Codex đang hiệu lực cho agent này. Thành viên pool được quản lý ở provider; trang này chỉ điều khiển hành vi routing.",
+    "strategyLabel": "Chính sách lưu lượng",
+    "strategyHint": "Primary First luôn ưu tiên bí danh chính. Round Robin xoay vòng qua mọi tài khoản sẵn sàng. Priority Order sẽ đi theo thứ tự đã cấu hình sau bí danh chính.",
+    "extraAccountsLabel": "Tài khoản phụ",
+    "availableExtraAccountsLabel": "Tài khoản phụ có thể thêm",
+    "poolMembershipLabel": "Thành viên pool",
+    "extraHint": "Chỉ các bí danh OpenAI Codex OAuth đã bật và đã đăng nhập mới được tham gia.",
+    "emptyExtras": "Đăng nhập thêm một bí danh OpenAI Codex OAuth để bật pooling.",
+    "noReadyExtras": "Đăng nhập và bật thêm một bí danh OpenAI Codex OAuth để thêm vào đây.",
+    "extraSelectableHint": "Chỉ các bí danh OpenAI Codex OAuth đã bật và đã đăng nhập mới được vào active pool.",
+    "selectedAccountsLabel": "Tài khoản trong pool",
+    "emptySelected": "Chưa chọn pool member bổ sung nào.",
+    "manageAction": "Mở Pool",
+    "singleAccountHint": "Hãy cấu hình thêm một provider OpenAI Codex OAuth khác trên trang Providers để tạo pool do provider quản lý.",
+    "membershipManagedAtProvider": "Thành viên pool được quản lý tại provider {{provider}}. Hãy đổi membership ở đó rồi quay lại đây để chỉnh hành vi routing.",
+    "membershipConfigureProviderFirst": "Provider {{provider}} chưa có provider-owned pool. Hãy cấu hình pool members ở đó trước khi bật pooled routing cho agent này.",
+    "readySummary": "{{ready}} / {{total}} tài khoản phụ đã sẵn sàng.",
+    "preferredNeedsAttention": "Tài khoản chính cần được xử lý trước khi agent dùng ổn định.",
+    "loadingAccounts": "Đang kiểm tra trạng thái tài khoản OpenAI Codex OAuth...",
+    "attentionTitle": "Các tài khoản cần chú ý",
+    "attentionHint": "Các tài khoản đã chọn nhưng bị tắt hoặc đã đăng xuất vẫn hiển thị ở đây cho đến khi bạn gỡ ra hoặc đăng nhập lại.",
+    "pageTitle": "Pool tài khoản OpenAI",
+    "pageDescription": "Xem pool OpenAI Codex đang hiệu lực cho {{name}}, rồi chọn agent này sẽ kế thừa mặc định của provider, chỉ dùng tài khoản chính, hay tinh chỉnh chiến lược routing.",
+    "backToAgent": "Quay lại Agent",
+    "openProviders": "Mở Providers",
+    "pageUnsupportedTitle": "Agent này chưa dùng provider OpenAI Codex OAuth",
+    "pageUnsupportedDescription": "Hãy đặt Provider của agent thành một bí danh OpenAI Codex OAuth trước, rồi quay lại đây để quản lý pool.",
+    "providerAccessTitle": "Chỉ admin mới quản lý được provider",
+    "providerAccessDescription": "Bạn vẫn có thể xem pool đang chạy ở đây, nhưng chỉ admin mới có thể đăng nhập tài khoản, thêm bí danh hoặc mở trang Providers.",
+    "providerAccessInline": "Chỉ admin mới có thể đăng nhập bí danh mới hoặc quản lý trang Providers.",
+    "unsavedChangesTitle": "Bản nháp chưa được áp dụng",
+    "unsavedChangesDescription": "Các thẻ xác minh bên dưới đang phản ánh pool đã lưu gần nhất. Hãy lưu bản nháp này trước khi dùng bằng chứng để xác nhận round robin.",
+    "draftBadge": "Bản nháp chờ lưu",
+    "savedPoolOnlyHint": "Bằng chứng trực tiếp vẫn đang phản ánh pool đã lưu gần nhất.",
+    "verificationTitle": "Cách xác minh hoạt động",
+    "verificationDescription": "Bằng chứng đến từ các LLM span gần đây của agent này. Làm mới trang sau vài request để so sánh pool đã cấu hình với các bí danh thực sự được dùng.",
+    "addPoolMembersTitle": "Thêm bí danh vào pool này",
+    "addPoolMembersDescription": "Tạo thêm các bí danh OpenAI Codex OAuth ở trang Providers, rồi quay lại đây để thêm chúng vào agent này.",
+    "needsAttentionTitle": "Cần chú ý",
+    "needsAttentionDescription": "{{count}} bí danh trong pool đang bị tắt hoặc cần đăng nhập lại trước khi bạn có thể tin cậy chúng.",
+    "never": "Chưa bao giờ",
+    "requestCount": "{{count}} request gần đây",
+    "lastUsedAt": "Dùng gần nhất {{value}}",
+    "openProvider": "Mở Provider",
+    "activityTitle": "Định tuyến trực tiếp",
+    "activityDescription": "Sức khỏe runtime và bằng chứng route trực tiếp.",
+    "refreshEvidence": "Làm mới trạng thái trực tiếp",
+    "recentRequestsCount": "{{count}} request gần đây",
+    "observedProviders": "{{observed}} / {{total}} tài khoản đã được dùng trực tiếp",
+    "failoverOnlyProviders": "{{count}} bí danh chỉ mới thấy qua failover",
+    "selectedCountLabel": "{{count}} lượt dùng trực tiếp",
+    "failoverServeCount": "{{count}} lượt phục vụ qua failover",
+    "failoverOnlyLabel": "Chỉ qua failover",
+    "switchRate": "{{switches}} lần đổi provider trong {{total}} bước request",
+    "poolMembersTitle": "Tài khoản trong pool",
+    "poolMembersDescription": "Vai trò, trạng thái route, bằng chứng gần đây và quota.",
+    "sequenceTitle": "Request gần đây",
+    "sequenceColumns": {
+      "step": "#",
+      "account": "Tài khoản",
+      "route": "Luồng",
+      "when": "Lúc",
+      "duration": "Thời gian"
+    },
+    "sequenceDescription": "Bằng chứng gần đây từ các lượt gọi Codex đã route.",
+    "sequenceEmptyTitle": "Chưa có bằng chứng gần đây",
+    "loadingEvidence": "Đang tải bằng chứng định tuyến Codex gần đây...",
+    "unknownModel": "Model không xác định",
+    "attemptCount": "{{count}} lượt thử",
+    "selectedProviderBadge": "Chọn {{provider}}",
+    "servedProviderBadge": "Phục vụ {{provider}}",
+    "failoverHint": "Lỗi có thể retry đã rơi sang: {{providers}}",
+    "traceAction": "Trace",
+    "openTrace": "Mở Trace",
+    "noEvidence": "Hãy gửi vài request Codex rồi làm mới trang.",
+    "selectedCount": "{{count}} trong pool",
+    "productLabel": "ChatGPT Subscription (OAuth)",
+    "controlTitle": "Thiết lập Pool",
+    "controlDescription": "Thành viên pool được quản lý ở provider. Trang này điều khiển việc agent kế thừa pool đó, chỉ dùng tài khoản chính, hay override chiến lược routing.",
+    "mode": {
+      "label": "Chế độ routing của agent",
+      "inherit": "Dùng mặc định từ provider",
+      "custom": "Tùy chỉnh riêng cho agent",
+      "noProviderDefault": "Chưa có provider-owned pool nào được lưu. Hãy cấu hình reusable pool members ở trang Providers trước, hoặc giữ agent này chỉ dùng tài khoản chính.",
+      "providerDefaultSummary": "Mặc định từ provider có {{count}} tài khoản",
+      "summaryInherited": "Agent này hiện đang dùng pool mặc định của provider.",
+      "summaryCustom": "Agent này hiện đang lưu routing override riêng cho provider-owned pool."
+    },
+    "poolStateTitle": "Trạng thái Pool",
+    "routerActiveTitle": "Đang route",
+    "fallbackTitle": "Chỉ fallback",
+    "blockedNowTitle": "Đang chặn",
+    "checkingTitle": "Đang kiểm tra",
+    "emptyGroup": "Không có",
+    "viewerMode": "Chỉ xem",
+    "consoleSummary": "{{active}} đang route · {{observed}} đã dùng trực tiếp · {{blocked}} đang chặn",
+    "monitorDirectLabel": "Trực tiếp",
+    "monitorDirectUseLabel": "Lượt trực tiếp",
+    "monitorFailoverLabel": "Failover",
+    "lastSeenLabel": "Lần thấy cuối",
+    "sampleBadge": "{{count}} span đã ghi nhận",
+    "noSampleBadge": "Chưa có mẫu gần đây",
+    "runtimeHealthTitle": "Sức khỏe runtime",
+    "runtimeHealthSummary": "{{rate}}% thành công · điểm {{score}}",
+    "noRuntimeSample": "Chưa có mẫu runtime gần đây.",
+    "failureStreakBadge": "{{count}} lỗi liên tiếp",
+    "runtimeSuccessCompact": "Thành công {{count}}",
+    "runtimeFailureCompact": "Thất bại {{count}}",
+    "lastSuccessLabel": "Lần ok cuối {{value}}",
+    "lastFailureLabel": "Lần lỗi cuối {{value}}",
+    "healthState": {
+      "healthy": "Ổn định",
+      "degraded": "Suy giảm",
+      "critical": "Nguy cấp",
+      "idle": "Chưa có mẫu"
+    },
+    "checkpoints": {
+      "configured": "Đã cấu hình",
+      "ready": "Sẵn sàng",
+      "observed": "Được dùng trực tiếp",
+      "switching": "Đang chuyển"
+    },
+    "nextActionTitle": "Hành động tiếp theo",
+    "nextAction": {
+      "saveTitle": "Hãy lưu bản nháp trước khi tin vào bằng chứng",
+      "saveDescription": "Pool đã lưu và bản nháp hiện tại đã khác nhau. Hãy lưu cấu hình trước, rồi mới kiểm tra lưu lượng trực tiếp.",
+      "attentionTitle": "Xử lý các bí danh đang cần chú ý",
+      "attentionDescription": "Các bí danh bị tắt hoặc đã đăng xuất vẫn hiển thị để bạn đăng nhập lại hoặc gỡ chúng khỏi pool.",
+      "quotaTitle": "Gỡ các chặn quota trước khi tin vào round robin",
+      "quotaDescription": "{{count}} bí danh đã đăng nhập nhưng hiện chưa cho thấy quota dùng được.",
+      "failoverOnlyTitle": "Kiểm tra các bí danh chỉ xuất hiện sau failover",
+      "failoverOnlyDescription": "{{count}} bí danh chỉ có lưu lượng gần đây dưới vai trò đích failover, chưa có bằng chứng được chọn trực tiếp.",
+      "addMembersTitle": "Thêm một bí danh đã đăng nhập để mở khóa pooling thực sự",
+      "addMembersDescription": "Round robin chỉ có ý nghĩa khi có hơn một bí danh sẵn sàng tham gia.",
+      "verifyTitle": "Gửi thêm vài request Codex rồi làm mới bằng chứng",
+      "verifyDescription": "Pool đã lưu và đã sẵn sàng, nhưng các lần gọi gần đây vẫn chưa cho thấy mọi bí danh sẵn sàng đều được chọn trực tiếp.",
+      "healthyTitle": "Hiện chưa cần thao tác thêm",
+      "healthyDescription": "Các lần gọi gần đây đang chọn trực tiếp mọi bí danh sẵn sàng trong pool đã lưu.",
+      "manualTitle": "Routing có thứ tự đang hoạt động",
+      "manualDescription": "Agent này không xoay vòng ở mọi request. Việc bí danh chính được dùng lặp lại là bình thường cho đến khi bật round robin."
+    },
+    "howItWorksTitle": "Pool này hoạt động thế nào",
+    "howItWorks": {
+      "primary": "Trường Provider của agent luôn ghim vào bí danh chính.",
+      "roundRobin": "Round Robin xoay vòng qua tất cả bí danh đã sẵn sàng trong active pool.",
+      "failover": "Các lỗi upstream có thể retry có thể rơi sang bí danh đủ điều kiện tiếp theo trong cùng request."
+    },
+    "quota": {
+      "checking": "Đang kiểm tra quota",
+      "checkingDescription": "GoClaw vẫn đang lấy trạng thái quota mới nhất cho bí danh này.",
+      "healthySummary": "{{usable}} / {{total}} bí danh có quota dùng được",
+      "needsAttention": "{{count}} bí danh đang cần xử lý quota",
+      "blockersNow": "Đang chặn lúc này",
+      "floorFiveHour": "Sàn 5h {{value}}%",
+      "floorWeekly": "Sàn tuần {{value}}%",
+      "plan": "Gói",
+      "lastChecked": "Đã kiểm tra {{value}}",
+      "readyLabel": "Quota dùng được",
+      "readyDescription": "Bí danh này hiện đang cho thấy các cửa sổ quota còn dùng được.",
+      "readinessTitle": "Mức sẵn sàng quota",
+      "readinessDescription": "Hãy nhìn phần này trước. Chỉ các bí danh đã đăng nhập và còn quota dùng được mới nên được tin cho lưu lượng trực tiếp.",
+      "requiresReadyAlias": "Bí danh này cần được đăng nhập trước khi GoClaw có thể xác minh quota.",
+      "failure": {
+        "billing": {
+          "label": "Billing",
+          "description": "Billing hoặc entitlement của workspace đang chặn tài khoản này."
+        },
+        "exhausted": {
+          "label": "Cạn quota",
+          "description": "Tài khoản này vẫn đăng nhập, nhưng một trong các cửa sổ quota chính đã cạn."
+        },
+        "reauth": {
+          "label": "Đăng nhập lại",
+          "description": "Hãy đăng nhập lại để làm mới quyền truy cập workspace."
+        },
+        "forbidden": {
+          "label": "Bị chặn",
+          "description": "Tài khoản này không thể đọc dữ liệu quota từ upstream."
+        },
+        "needs_setup": {
+          "label": "Cần thiết lập",
+          "description": "Hãy đăng nhập lại để GoClaw khôi phục metadata workspace của tài khoản."
+        },
+        "retry_later": {
+          "label": "Thử lại sau",
+          "description": "Endpoint quota đang tạm thời không sẵn sàng hoặc bị rate limit."
+        },
+        "unavailable": {
+          "label": "Không khả dụng",
+          "description": "Hiện không lấy được dữ liệu quota cho tài khoản này."
+        }
+      }
+    },
+    "metrics": {
+      "poolHealth": "Sức khỏe pool",
+      "policy": "Chính sách lưu lượng",
+      "poolSize": "Số tài khoản",
+      "observedSample": "Mẫu đã ghi nhận",
+      "routerActiveAccounts": "Router Active",
+      "blockedAccounts": "Đang chặn",
+      "readyAccounts": "Tài khoản đã đăng nhập",
+      "quotaReadyAccounts": "Quota sẵn sàng",
+      "observedRotation": "Dùng trực tiếp",
+      "healthy": "Ổn định",
+      "needsAttention": "Cần chú ý",
+      "readyOfTotal": "{{ready}} / {{total}} bí danh sẵn sàng",
+      "failovers": "Failover",
+      "noFailovers": "Chưa có failover"
+    },
+    "verdict": {
+      "healthy": {
+        "title": "Round robin có vẻ khỏe",
+        "description": "Đã thấy {{observed}} tài khoản sẵn sàng luân phiên qua {{count}} span gần đây."
+      },
+      "warning": {
+        "title": "Round robin đã cấu hình nhưng chưa xác minh đủ",
+        "description": "Mới chỉ có {{observed}} tài khoản sẵn sàng có bằng chứng dùng trực tiếp trong {{count}} span gần đây."
+      },
+      "manual": {
+        "title": "Routing có thứ tự đang hoạt động",
+        "description": "Agent này không xoay vòng ở mọi request. Việc bí danh chính được dùng lặp lại là bình thường cho đến khi bật round robin."
+      }
+    },
+    "role": {
+      "preferred": "Chính",
+      "extra": "Phụ"
+    },
+    "status": {
+      "ready": "Sẵn sàng",
+      "needs_sign_in": "Cần đăng nhập",
+      "disabled": "Đã tắt"
+    },
+    "strategy": {
+      "manual": "Primary First",
+      "primaryFirst": "Primary First",
+      "roundRobin": "Round Robin",
+      "priorityOrder": "Priority Order"
+    }
+  },
   "identity": {
     "title": "Nhận dạng",
     "agentKey": "Khóa agent",
@@ -286,8 +533,7 @@
     "retrying": "Đang thử lại...",
     "done": "xong",
     "fileLabelSOUL": "Linh hồn & Tính cách",
-    "fileLabelIDENTITY": "Thẻ danh tính",
-    "fileLabelUSER_PREDEFINED": "Ngữ cảnh người dùng mặc định"
+    "fileLabelIDENTITY": "Thẻ danh tính"
   },
   "configGroups": {
     "core": "Cốt lõi",

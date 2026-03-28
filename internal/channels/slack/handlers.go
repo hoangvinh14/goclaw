@@ -193,6 +193,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 				Sender:    displayName,
 				SenderID:  senderID,
 				Body:      content,
+				Media:     mediaPaths,
 				Timestamp: time.Now(),
 				MessageID: ev.TimeStamp,
 			}, c.historyLimit)
@@ -238,6 +239,10 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 	if peerKind == "group" {
 		annotated := fmt.Sprintf("[From: %s]\n%s", displayName, content)
 		if c.historyLimit > 0 {
+			// Collect media from pending history (files downloaded by earlier non-mentioned messages).
+			if histMediaPaths := c.groupHistory.CollectMedia(localKey); len(histMediaPaths) > 0 {
+				mediaPaths = append(mediaPaths, histMediaPaths...)
+			}
 			finalContent = c.groupHistory.BuildContext(localKey, annotated, c.historyLimit)
 		} else {
 			finalContent = annotated

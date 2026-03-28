@@ -356,6 +356,27 @@ func TeamTaskIDFromCtx(ctx context.Context) string {
 	return ""
 }
 
+// --- Leader agent ID propagation (team task dispatch → memory interceptor) ---
+
+const ctxLeaderAgentID toolContextKey = "tool_leader_agent_id"
+
+// WithLeaderAgentID injects the team leader's agent UUID string into context
+// so the memory interceptor can fallback-read leader's memory for team members.
+func WithLeaderAgentID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxLeaderAgentID, id)
+}
+
+// LeaderAgentIDFromCtx returns the leader's agent UUID string from context.
+func LeaderAgentIDFromCtx(ctx context.Context) string {
+	if v, _ := ctx.Value(ctxLeaderAgentID).(string); v != "" {
+		return v
+	}
+	if rc := store.RunContextFromCtx(ctx); rc != nil {
+		return rc.LeaderAgentID
+	}
+	return ""
+}
+
 // --- Workspace scope propagation (delegation origin) ---
 
 const (

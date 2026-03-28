@@ -5,6 +5,8 @@ export const queryKeys = {
   providers: {
     all: ["providers"] as const,
     models: (providerId: string) => ["providers", providerId, "models"] as const,
+    chatgptOAuthStatuses: (providerKeys: string[]) => ["providers", "chatgpt-oauth-statuses", ...providerKeys] as const,
+    chatgptOAuthQuotas: (providerNames: string[]) => ["providers", "chatgpt-oauth-quotas", ...providerNames] as const,
   },
   agents: {
     all: ["agents"] as const,
@@ -12,6 +14,7 @@ export const queryKeys = {
     files: (agentKey: string) => ["agents", agentKey, "files"] as const,
     links: (agentId: string) => ["agents", agentId, "links"] as const,
     instances: (agentId: string) => ["agents", agentId, "instances"] as const,
+    codexPoolActivity: (agentId: string, limit: number) => ["agents", agentId, "codex-pool-activity", limit] as const,
   },
   sessions: {
     all: ["sessions"] as const,

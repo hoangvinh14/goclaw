@@ -122,7 +122,7 @@ func (t *CreateImageTool) Execute(ctx context.Context, args map[string]any) *Res
 		slog.Info("create_image: file saved", "path", imagePath, "size", fi.Size(), "data_len", len(chainResult.Data))
 	}
 
-	result := &Result{ForLLM: fmt.Sprintf("MEDIA:%s", imagePath)}
+	result := &Result{ForLLM: fmt.Sprintf("MEDIA:%s\nUse the EXACT filename when referencing: %s", imagePath, filepath.Base(imagePath))}
 	result.Media = []bus.MediaFile{{Path: imagePath, MimeType: "image/png"}}
 	result.Deliverable = fmt.Sprintf("[Generated image: %s]\nPrompt: %s", filepath.Base(imagePath), prompt)
 	result.Provider = chainResult.Provider

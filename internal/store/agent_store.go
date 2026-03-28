@@ -32,9 +32,9 @@ const (
 
 // Agent status constants.
 const (
-	AgentStatusActive      = "active"
-	AgentStatusInactive    = "inactive"
-	AgentStatusSummoning   = "summoning"
+	AgentStatusActive       = "active"
+	AgentStatusInactive     = "inactive"
+	AgentStatusSummoning    = "summoning"
 	AgentStatusSummonFailed = "summon_failed"
 )
 
@@ -43,18 +43,18 @@ type AgentData struct {
 	BaseModel
 	TenantID            uuid.UUID `json:"tenant_id"`
 	AgentKey            string    `json:"agent_key"`
-	DisplayName         string `json:"display_name,omitempty"`
-	Frontmatter         string `json:"frontmatter,omitempty"` // short expertise summary (NOT other_config.description which is the summoning prompt)
-	OwnerID             string `json:"owner_id"`
-	Provider            string `json:"provider"`
-	Model               string `json:"model"`
-	ContextWindow       int    `json:"context_window"`
-	MaxToolIterations   int    `json:"max_tool_iterations"`
-	Workspace           string `json:"workspace"`
-	RestrictToWorkspace bool   `json:"restrict_to_workspace"`
-	AgentType           string `json:"agent_type"` // "open" or "predefined"
-	IsDefault           bool   `json:"is_default"`
-	Status              string `json:"status"`
+	DisplayName         string    `json:"display_name,omitempty"`
+	Frontmatter         string    `json:"frontmatter,omitempty"` // short expertise summary (NOT other_config.description which is the summoning prompt)
+	OwnerID             string    `json:"owner_id"`
+	Provider            string    `json:"provider"`
+	Model               string    `json:"model"`
+	ContextWindow       int       `json:"context_window"`
+	MaxToolIterations   int       `json:"max_tool_iterations"`
+	Workspace           string    `json:"workspace"`
+	RestrictToWorkspace bool      `json:"restrict_to_workspace"`
+	AgentType           string    `json:"agent_type"` // "open" or "predefined"
+	IsDefault           bool      `json:"is_default"`
+	Status              string    `json:"status"`
 
 	// Budget: optional monthly spending limit in cents (nil = unlimited)
 	BudgetMonthlyCents *int `json:"budget_monthly_cents,omitempty"`
@@ -156,16 +156,19 @@ func (a *AgentData) ParseMemoryConfig() *config.MemoryConfig {
 }
 
 // ParseThinkingLevel extracts thinking_level from other_config JSONB.
-// Returns "" if not configured (meaning "off").
+// Returns "low" if not configured (default thinking mode).
 func (a *AgentData) ParseThinkingLevel() string {
 	if len(a.OtherConfig) == 0 {
-		return ""
+		return "low"
 	}
 	var cfg struct {
 		ThinkingLevel string `json:"thinking_level"`
 	}
 	if json.Unmarshal(a.OtherConfig, &cfg) != nil {
-		return ""
+		return "low"
+	}
+	if cfg.ThinkingLevel == "" {
+		return "low"
 	}
 	return cfg.ThinkingLevel
 }
@@ -239,11 +242,31 @@ func (a *AgentData) ParseSkillNudgeInterval() int {
 // When shared_dm/shared_group is true, users share the base workspace directory
 // instead of each getting an isolated subfolder.
 type WorkspaceSharingConfig struct {
-	SharedDM    bool     `json:"shared_dm"`
-	SharedGroup bool     `json:"shared_group"`
-	SharedUsers []string `json:"shared_users,omitempty"`
-	ShareMemory         bool `json:"share_memory"`
-	ShareKnowledgeGraph bool `json:"share_knowledge_graph"`
+	SharedDM            bool     `json:"shared_dm"`
+	SharedGroup         bool     `json:"shared_group"`
+	SharedUsers         []string `json:"shared_users,omitempty"`
+	ShareMemory         bool     `json:"share_memory"`
+	ShareKnowledgeGraph bool     `json:"share_knowledge_graph"`
+}
+
+const (
+	ChatGPTOAuthStrategyManual       = "manual" // legacy alias
+	ChatGPTOAuthStrategyPrimaryFirst = "primary_first"
+	ChatGPTOAuthStrategyRoundRobin   = "round_robin"
+	ChatGPTOAuthStrategyPriority     = "priority_order"
+)
+
+const (
+	ChatGPTOAuthOverrideInherit = "inherit"
+	ChatGPTOAuthOverrideCustom  = "custom"
+)
+
+// ChatGPTOAuthRoutingConfig controls optional multi-account selection for agents
+// whose primary provider is a ChatGPT OAuth-backed provider.
+type ChatGPTOAuthRoutingConfig struct {
+	OverrideMode       string   `json:"override_mode,omitempty"`
+	Strategy           string   `json:"strategy,omitempty"`
+	ExtraProviderNames []string `json:"extra_provider_names,omitempty"`
 }
 
 // ParseWorkspaceSharing extracts workspace_sharing from other_config JSONB.
@@ -262,6 +285,146 @@ func (a *AgentData) ParseWorkspaceSharing() *WorkspaceSharingConfig {
 		return nil
 	}
 	return cfg.WS
+}
+
+// ParseChatGPTOAuthRouting extracts chatgpt_oauth_routing from other_config JSONB.
+// Returns nil when no routing is configured.
+func (a *AgentData) ParseChatGPTOAuthRouting() *ChatGPTOAuthRoutingConfig {
+	if len(a.OtherConfig) == 0 {
+		return nil
+	}
+	var cfg struct {
+		Routing *ChatGPTOAuthRoutingConfig `json:"chatgpt_oauth_routing"`
+	}
+	if json.Unmarshal(a.OtherConfig, &cfg) != nil || cfg.Routing == nil {
+		return nil
+	}
+	explicitOverrideMode := strings.TrimSpace(cfg.Routing.OverrideMode) != ""
+	explicitStrategy := strings.TrimSpace(cfg.Routing.Strategy) != ""
+	explicitExtras := cfg.Routing.ExtraProviderNames != nil
+	routing := normalizeChatGPTOAuthRoutingConfig(cfg.Routing)
+	if routing == nil {
+		if !explicitOverrideMode && !explicitStrategy && !explicitExtras {
+			return nil
+		}
+		overrideMode := ChatGPTOAuthOverrideCustom
+		if explicitOverrideMode {
+			overrideMode = normalizeChatGPTOAuthOverrideMode(cfg.Routing.OverrideMode)
+		}
+		return &ChatGPTOAuthRoutingConfig{
+			OverrideMode:       overrideMode,
+			Strategy:           normalizeChatGPTOAuthStrategy(cfg.Routing.Strategy),
+			ExtraProviderNames: normalizeProviderNames(cfg.Routing.ExtraProviderNames),
+		}
+	}
+	if explicitOverrideMode {
+		return routing
+	}
+	if explicitStrategy || explicitExtras {
+		routing.OverrideMode = ChatGPTOAuthOverrideCustom
+		return routing
+	}
+	routing.OverrideMode = ""
+	if routing.Strategy == ChatGPTOAuthStrategyPrimaryFirst && len(routing.ExtraProviderNames) == 0 {
+		return nil
+	}
+	return routing
+}
+
+func normalizeChatGPTOAuthRoutingConfig(cfg *ChatGPTOAuthRoutingConfig) *ChatGPTOAuthRoutingConfig {
+	if cfg == nil {
+		return nil
+	}
+	routing := &ChatGPTOAuthRoutingConfig{
+		OverrideMode:       normalizeChatGPTOAuthOverrideMode(cfg.OverrideMode),
+		Strategy:           normalizeChatGPTOAuthStrategy(cfg.Strategy),
+		ExtraProviderNames: normalizeProviderNames(cfg.ExtraProviderNames),
+	}
+	if routing.OverrideMode == "" && routing.Strategy == ChatGPTOAuthStrategyPrimaryFirst && len(routing.ExtraProviderNames) == 0 {
+		return nil
+	}
+	return routing
+}
+
+func normalizeChatGPTOAuthOverrideMode(value string) string {
+	switch value {
+	case ChatGPTOAuthOverrideInherit:
+		return ChatGPTOAuthOverrideInherit
+	case "", ChatGPTOAuthOverrideCustom:
+		return ChatGPTOAuthOverrideCustom
+	default:
+		return ChatGPTOAuthOverrideCustom
+	}
+}
+
+func normalizeChatGPTOAuthStrategy(value string) string {
+	switch value {
+	case "", ChatGPTOAuthStrategyManual, ChatGPTOAuthStrategyPrimaryFirst:
+		return ChatGPTOAuthStrategyPrimaryFirst
+	case ChatGPTOAuthStrategyRoundRobin, ChatGPTOAuthStrategyPriority:
+		return value
+	default:
+		return ChatGPTOAuthStrategyPrimaryFirst
+	}
+}
+
+func CloneChatGPTOAuthRoutingConfig(cfg *ChatGPTOAuthRoutingConfig) *ChatGPTOAuthRoutingConfig {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	clone.ExtraProviderNames = append([]string(nil), cfg.ExtraProviderNames...)
+	return &clone
+}
+
+func ResolveEffectiveChatGPTOAuthRouting(defaults, agentRouting *ChatGPTOAuthRoutingConfig) *ChatGPTOAuthRoutingConfig {
+	normalizedDefaults := normalizeChatGPTOAuthRoutingConfig(defaults)
+	normalizedAgent := normalizeChatGPTOAuthRoutingConfig(agentRouting)
+	if normalizedAgent == nil {
+		return CloneChatGPTOAuthRoutingConfig(normalizedDefaults)
+	}
+	if normalizedAgent.OverrideMode == ChatGPTOAuthOverrideInherit {
+		return CloneChatGPTOAuthRoutingConfig(normalizedDefaults)
+	}
+	effective := CloneChatGPTOAuthRoutingConfig(normalizedAgent)
+	if effective == nil {
+		return nil
+	}
+	effective.OverrideMode = ""
+	if normalizedDefaults != nil && len(normalizedDefaults.ExtraProviderNames) > 0 {
+		if effective.Strategy == ChatGPTOAuthStrategyPrimaryFirst &&
+			len(normalizedAgent.ExtraProviderNames) == 0 {
+			effective.ExtraProviderNames = nil
+		} else {
+			effective.ExtraProviderNames = append([]string(nil), normalizedDefaults.ExtraProviderNames...)
+		}
+	}
+	if effective.Strategy == ChatGPTOAuthStrategyPrimaryFirst &&
+		len(effective.ExtraProviderNames) == 0 &&
+		normalizedAgent.OverrideMode != ChatGPTOAuthOverrideCustom {
+		return nil
+	}
+	return effective
+}
+
+func normalizeProviderNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ParseShellDenyGroups extracts shell_deny_groups from other_config JSONB.
@@ -371,4 +534,3 @@ type UserInstanceData struct {
 	FileCount   int               `json:"file_count"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
-

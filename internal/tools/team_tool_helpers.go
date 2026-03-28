@@ -50,6 +50,23 @@ func (m *TeamToolManager) agentDisplayName(ctx context.Context, key string) stri
 }
 
 // ============================================================
+// TeamToolBackend exported wrappers (helpers layer)
+// ============================================================
+
+func (m *TeamToolManager) BroadcastTeamEvent(ctx context.Context, name string, payload any) {
+	m.broadcastTeamEvent(ctx, name, payload)
+}
+func (m *TeamToolManager) AgentDisplayName(ctx context.Context, key string) string {
+	return m.agentDisplayName(ctx, key)
+}
+func (m *TeamToolManager) FollowupDelayMinutes(team *store.TeamData) int {
+	return m.followupDelayMinutes(team)
+}
+func (m *TeamToolManager) FollowupMaxReminders(team *store.TeamData) int {
+	return m.followupMaxReminders(team)
+}
+
+// ============================================================
 // Version helpers
 // ============================================================
 

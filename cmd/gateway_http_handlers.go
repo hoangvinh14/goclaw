@@ -5,7 +5,6 @@ import (
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
-	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -26,14 +25,14 @@ func wireHTTP(stores *store.Stores, defaultWorkspace, dataDir, bundledSkillsDir 
 		if providerReg != nil {
 			summoner = httpapi.NewAgentSummoner(stores.Agents, providerReg, msgBus)
 		}
-		agentsH = httpapi.NewAgentsHandler(stores.Agents, defaultWorkspace, msgBus, summoner, isOwner)
+		agentsH = httpapi.NewAgentsHandler(stores.Agents, stores.Providers, providerReg, stores.DB, stores.Tracing, defaultWorkspace, msgBus, summoner, isOwner)
 	}
 
 	if stores != nil && stores.Skills != nil {
-		if pgSkills, ok := stores.Skills.(*pg.PGSkillStore); ok {
-			dirs := pgSkills.Dirs()
+		if manageStore, ok := stores.Skills.(store.SkillManageStore); ok {
+			dirs := manageStore.Dirs()
 			if len(dirs) > 0 {
-				skillsH = httpapi.NewSkillsHandler(pgSkills, dirs[0], dataDir, bundledSkillsDir, msgBus, stores.SkillTenantCfgs, stores.Tenants)
+				skillsH = httpapi.NewSkillsHandler(manageStore, dirs[0], dataDir, bundledSkillsDir, msgBus, stores.SkillTenantCfgs, stores.Tenants)
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,11 +13,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/edition"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/safego"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
+
+// teamGuidance returns edition-specific system prompt guidance for team members.
+func teamGuidance(fullMode bool) string {
+	if fullMode {
+		return tools.FullTeamPolicy{}.MemberGuidance()
+	}
+	return tools.LiteTeamPolicy{}.MemberGuidance()
+}
 
 // filteredToolNames returns tool names after applying policy filters.
 // Used for system prompt so denied tools don't appear in ## Tooling section.
@@ -30,6 +40,29 @@ func (l *Loop) filteredToolNames() []string {
 		names[i] = d.Function.Name
 	}
 	return names
+}
+
+// filteredToolNamesForChannel returns tool names after applying both policy
+// and ChannelAware filters. Tools that implement ChannelAware and don't list
+// the current channelType are excluded — keeps the system prompt Tooling
+// section consistent with the actual tool definitions sent to the LLM.
+func (l *Loop) filteredToolNamesForChannel(channelType string) []string {
+	names := l.filteredToolNames()
+	if channelType == "" {
+		return names
+	}
+	filtered := names[:0:0]
+	for _, name := range names {
+		if tool, ok := l.tools.Get(name); ok {
+			if ca, ok := tool.(tools.ChannelAware); ok {
+				if !slices.Contains(ca.RequiredChannelTypes(), channelType) {
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered
 }
 
 // buildCredentialCLIContext generates the TOOLS.md supplement for credentialed CLIs.
@@ -66,7 +99,7 @@ func (l *Loop) buildMCPToolDescs(toolNames []string) map[string]string {
 // buildMessages constructs the full message list for an LLM request.
 // Returns the messages and whether BOOTSTRAP.md was present in context files
 // (used by the caller for auto-cleanup without an extra DB roundtrip).
-func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, summary, userMessage, extraSystemPrompt, sessionKey, channel, channelType, peerKind, userID string, historyLimit int, skillFilter []string, lightContext bool) ([]providers.Message, bool) {
+func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, summary, userMessage, extraSystemPrompt, sessionKey, channel, channelType, chatTitle, peerKind, userID string, historyLimit int, skillFilter []string, lightContext bool) ([]providers.Message, bool) {
 	var messages []providers.Message
 
 	// Build full system prompt using the new builder (matching TS buildAgentSystemPrompt)
@@ -83,20 +116,20 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	_, hasKG := l.tools.Get("knowledge_graph_search")
 
 	// Per-user workspace: show the user's subdirectory in the system prompt.
-	// Uses cached workspace from user_agent_profiles (includes channel isolation).
+	// Uses cached workspace from userSetups (includes channel isolation).
 	// When workspace sharing is enabled, show the base workspace without user subfolder.
 	promptWorkspace := l.workspace
 	if l.agentUUID != uuid.Nil && userID != "" && l.workspace != "" {
 		shared := l.shouldShareWorkspace(userID, peerKind)
-		if cachedWs, ok := l.userWorkspaces.Load(userID); ok {
-			promptWorkspace = tools.ResolveWorkspace(cachedWs.(string),
-				tools.UserChatLayer(tools.SanitizePathSegment(userID), shared),
-			)
-		} else {
-			promptWorkspace = tools.ResolveWorkspace(l.workspace,
-				tools.UserChatLayer(tools.SanitizePathSegment(userID), shared),
-			)
+		baseWs := l.workspace
+		if val, ok := l.userSetups.Load(userID); ok {
+			if ws := val.(*userSetup).workspace; ws != "" {
+				baseWs = ws
+			}
 		}
+		promptWorkspace = tools.ResolveWorkspace(baseWs,
+			tools.UserChatLayer(tools.SanitizePathSegment(userID), shared),
+		)
 	}
 
 	// Resolve context files once — also detect BOOTSTRAP.md presence.
@@ -104,6 +137,17 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	var contextFiles []bootstrap.ContextFile
 	if !lightContext {
 		contextFiles = l.resolveContextFiles(ctx, userID)
+
+		// Fallback: if DB seeding failed (e.g. SQLITE_BUSY) but we have
+		// in-memory embedded templates, merge them so the first turn still
+		// gets bootstrap onboarding. Only applies when DB returned no user files.
+		if val, ok := l.userSetups.Load(userID); ok {
+			if fb := val.(*userSetup).fallbackBootstrap; len(fb) > 0 {
+				contextFiles = l.mergeContextFallback(contextFiles, fb)
+				// Clear after first use — next turn should read from DB.
+				val.(*userSetup).fallbackBootstrap = nil
+			}
+		}
 	}
 	hadBootstrap := false
 	for _, cf := range contextFiles {
@@ -113,10 +157,15 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		}
 	}
 
-	// Bootstrap mode: group chats and team-dispatched sessions skip onboarding entirely;
-	// only DMs enter minimal bootstrap mode.
-	if hadBootstrap && (peerKind == "group" || bootstrap.IsTeamSession(sessionKey)) {
-		// Filter BOOTSTRAP.md from context files — groups/team tasks don't need onboarding.
+	// Bootstrap mode: only direct user DMs need onboarding.
+	// System sessions (group, team, subagent, cron, heartbeat) skip bootstrap
+	// to prevent the model from getting distracted by onboarding instructions.
+	isSystemSession := peerKind == "group" ||
+		bootstrap.IsTeamSession(sessionKey) ||
+		bootstrap.IsSubagentSession(sessionKey) ||
+		bootstrap.IsCronSession(sessionKey) ||
+		bootstrap.IsHeartbeatSession(sessionKey)
+	if hadBootstrap && isSystemSession {
 		filtered := make([]bootstrap.ContextFile, 0, len(contextFiles))
 		for _, cf := range contextFiles {
 			if cf.Path != bootstrap.BootstrapFile {
@@ -141,7 +190,9 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	}
 
 	// Build tool list, filtering out skill_manage when skill_evolve is off.
-	toolNames := l.filteredToolNames()
+	// Also applies ChannelAware filtering so channel-specific tools don't
+	// appear in ## Tooling when the current channel doesn't support them.
+	toolNames := l.filteredToolNamesForChannel(channelType)
 	if !l.skillEvolve {
 		filtered := toolNames[:0:0]
 		for _, n := range toolNames {
@@ -177,6 +228,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		Workspace:              promptWorkspace,
 		Channel:                channel,
 		ChannelType:            channelType,
+		ChatTitle:              chatTitle,
 		PeerKind:               peerKind,
 		OwnerIDs:               l.ownerIDs,
 		Mode:                   mode,
@@ -187,6 +239,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		HasTeam:                hasTeamTools,
 		TeamWorkspace:          tools.ToolTeamWorkspaceFromCtx(ctx),
 		TeamMembers:            teamMembers,
+		TeamGuidance:           teamGuidance(edition.Current().TeamFullMode),
 		HasSkillSearch:         hasSkillSearch,
 		HasSkillManage:         l.skillEvolve && hasSkillManage,
 		HasMCPToolSearch:       hasMCPToolSearch,
@@ -274,6 +327,21 @@ func (l *Loop) resolveContextFiles(ctx context.Context, userID string) []bootstr
 		}
 	}
 	return merged
+}
+
+// mergeContextFallback adds fallback (in-memory) files into contextFiles,
+// skipping any that already exist. Used when DB seeding failed.
+func (l *Loop) mergeContextFallback(contextFiles, fallback []bootstrap.ContextFile) []bootstrap.ContextFile {
+	existing := make(map[string]struct{}, len(contextFiles))
+	for _, f := range contextFiles {
+		existing[f.Path] = struct{}{}
+	}
+	for _, fb := range fallback {
+		if _, ok := existing[fb.Path]; !ok {
+			contextFiles = append(contextFiles, fb)
+		}
+	}
+	return contextFiles
 }
 
 // bootstrapToolAllowlist is the set of tools available during bootstrap onboarding.

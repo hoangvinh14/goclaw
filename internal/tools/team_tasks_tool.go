@@ -3,16 +3,18 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // TeamTasksTool exposes the shared team task list to agents.
-// Actions: list, get, create, claim, complete, cancel, search, review, comment, progress, attach, update.
+// Actions are filtered by TeamActionPolicy (full in standard, limited in lite).
 type TeamTasksTool struct {
-	manager *TeamToolManager
+	manager TeamToolBackend
+	policy  TeamActionPolicy
 }
 
-func NewTeamTasksTool(manager *TeamToolManager) *TeamTasksTool {
-	return &TeamTasksTool{manager: manager}
+func NewTeamTasksTool(manager TeamToolBackend, policy TeamActionPolicy) *TeamTasksTool {
+	return &TeamTasksTool{manager: manager, policy: policy}
 }
 
 func (t *TeamTasksTool) Name() string { return "team_tasks" }
@@ -27,10 +29,8 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type": "string",
-				"description": "'list', 'get', 'create', 'claim', 'complete', 'cancel', 'approve', 'reject', 'search', 'review', 'comment', 'progress', 'attach', 'update', 'ask_user', or 'clear_ask_user'. " +
-					"ask_user: set a periodic reminder that is sent to the USER (not the team) when you need the user's input/decision to continue (e.g. 'Which design do you prefer?'). ONLY use when you have a question for the user. Do NOT use for status updates, waiting for teammates, or notifications — use 'progress' instead. " +
-					"clear_ask_user: cancel a previously set ask_user reminder. " +
-					"retry: re-dispatch a stale or failed task.",
+				"enum": t.policy.AllowedActions(),
+				"description": t.buildActionDescription(),
 			},
 			"task_id": map[string]any{
 				"type":        "string",
@@ -42,7 +42,7 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 			},
 			"description": map[string]any{
 				"type":        "string",
-				"description": "Task description with clear objectives and requirements. Include all context the assignee needs to complete the task independently.",
+				"description": "Task description — ONE specific action with clear objective and expected output. Detailed context is fine, but if you need TWO different skills (research+writing, design+coding), split into separate tasks. Include all context the assignee needs.",
 			},
 			"result": map[string]any{
 				"type":        "string",
@@ -98,8 +98,25 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 	}
 }
 
+// buildActionDescription returns the action parameter description based on policy.
+func (t *TeamTasksTool) buildActionDescription() string {
+	base := "Available actions: " + strings.Join(t.policy.AllowedActions(), ", ") + "."
+	if t.policy.IsAllowed("ask_user") {
+		base += " ask_user: set a periodic reminder sent to the USER when you need input. clear_ask_user: cancel a previously set reminder."
+	}
+	if t.policy.IsAllowed("retry") {
+		base += " retry: re-dispatch a stale or failed task."
+	}
+	return base
+}
+
 func (t *TeamTasksTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
+
+	// Edition policy guard — reject actions not allowed in this edition.
+	if !t.policy.IsAllowed(action) {
+		return ErrorResult(fmt.Sprintf("action %q is not available in this edition", action))
+	}
 
 	// Block mutations during notification runs — leader may only relay status.
 	if RunKindFromCtx(ctx) == RunKindNotification {

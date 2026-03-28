@@ -335,6 +335,68 @@ func (l *Loop) enrichImageIDs(messages []providers.Message, refs []providers.Med
 	messages[lastIdx].Content = content
 }
 
+// enrichImagePaths updates ALL user messages to include persisted file paths
+// in <media:image> tags. This enables the LLM to call read_image(path=...)
+// to analyze images without inline base64 (saving context tokens).
+// Unlike enrichImageIDs (last user message only), this enriches ALL messages
+// so historical images from prior turns are also accessible via file path.
+func (l *Loop) enrichImagePaths(messages []providers.Message) {
+	if l.mediaStore == nil {
+		return
+	}
+	for i := range messages {
+		if messages[i].Role != "user" || len(messages[i].MediaRefs) == 0 {
+			continue
+		}
+		content := messages[i].Content
+		changed := false
+		for _, ref := range messages[i].MediaRefs {
+			if ref.Kind != "image" {
+				continue
+			}
+			p := ref.Path
+			if p == "" {
+				var err error
+				p, err = l.mediaStore.LoadPath(ref.ID)
+				if err != nil {
+					continue
+				}
+			}
+			if p == "" {
+				continue
+			}
+			pathAttr := fmt.Sprintf(" path=%q", p)
+
+			// Skip if path already present in this tag.
+			tagWithID := fmt.Sprintf(`<media:image id=%q`, ref.ID)
+			if idx := strings.Index(content, tagWithID); idx >= 0 {
+				closeIdx := strings.Index(content[idx:], ">")
+				if closeIdx >= 0 {
+					tag := content[idx : idx+closeIdx]
+					if strings.Contains(tag, "path=") {
+						continue // already has path
+					}
+					// Inject path before closing >
+					content = content[:idx+closeIdx] + pathAttr + content[idx+closeIdx:]
+					changed = true
+				}
+				continue
+			}
+
+			// Bare <media:image> without id — replace LAST occurrence.
+			bare := "<media:image>"
+			if idx := strings.LastIndex(content, bare); idx >= 0 {
+				replacement := fmt.Sprintf(`<media:image id=%q%s>`, ref.ID, pathAttr)
+				content = content[:idx] + replacement + content[idx+len(bare):]
+				changed = true
+			}
+		}
+		if changed {
+			messages[i].Content = content
+		}
+	}
+}
+
 // mediaKindFromMime returns the media kind ("image", "video", "audio", "document")
 // based on MIME type prefix.
 func mediaKindFromMime(mime string) string {

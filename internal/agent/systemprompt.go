@@ -27,6 +27,7 @@ type SystemPromptConfig struct {
 	Workspace     string
 	Channel       string                 // runtime channel instance name (e.g. "my-telegram-bot")
 	ChannelType   string                 // platform type (e.g. "zalo_personal", "telegram")
+	ChatTitle     string                 // group chat display name (shown in identity line)
 	PeerKind      string                 // "direct" or "group"
 	OwnerIDs      []string               // owner sender IDs
 	Mode          PromptMode             // full or minimal
@@ -37,6 +38,7 @@ type SystemPromptConfig struct {
 	HasTeam        bool                   // agent belongs to a team? (skips generic spawn section)
 	TeamWorkspace  string                 // absolute path to team shared workspace (empty if not in team)
 	TeamMembers    []store.TeamMemberData // team member roster for task assignment
+	TeamGuidance   string                 // edition-specific guidance from TeamActionPolicy.MemberGuidance()
 	ContextFiles  []bootstrap.ContextFile // bootstrap files for # Project Context
 	ExtraPrompt   string                 // extra system prompt (subagent context, etc.)
 	AgentType     string                 // "open" or "predefined" — affects context file framing
@@ -96,15 +98,17 @@ var coreToolSummaries = map[string]string{
 	"session_status":   "Show session status (model, tokens, compaction count)",
 	"sessions_history": "Fetch message history for a session",
 	"sessions_send":    "Send a message into another session",
-	"read_image":       "Analyze images attached to the conversation. Call this when you see <media:image> tags",
-	"read_audio":       "Analyze audio files attached to the conversation. Call this when you see <media:audio> tags",
-	"read_video":       "Analyze video files attached to the conversation. Call this when you see <media:video> tags",
+	"read_image":       "REQUIRED when you see <media:image> tags — call this tool with the path attribute to analyze the image. You CAN see images through this tool. Never say you cannot see images",
+	"read_audio":       "REQUIRED when you see <media:audio> tags — call this tool to transcribe or analyze audio content",
+	"read_video":       "REQUIRED when you see <media:video> tags — call this tool to analyze video content",
 	"create_video":     "Generate videos from text descriptions using AI",
 	"read_document":    "Analyze documents (PDF, DOCX, etc.) attached to the conversation. Call this when you see <media:document> tags. If this tool fails, use a relevant skill instead (e.g. pdf skill with exec tool). The path attribute in <media:document path=\"...\"> is a directly accessible file in your workspace — use it directly, no need to copy",
 	"create_image":            "Generate images from text descriptions using AI",
 	"create_audio":            "Generate music or sound effects from text descriptions using AI",
 	"knowledge_graph_search":  "Find people, projects, and their connections — use for relationship questions (who works with whom, project dependencies) that memory_search may miss",
 	"team_tasks":              "Team task board — track progress, manage dependencies (spawn auto-creates delegation tasks)",
+	"list_group_members":      "List all members of the current group chat (Feishu/Lark only)",
+	"create_forum_topic":      "Create a forum topic in a Telegram supergroup",
 
 	// Legacy tool aliases — kept for backward compatibility with older clients
 	"edit_file":      "Alias for edit — Edit a file by replacing exact text matches",
@@ -137,6 +141,15 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 		chatType := "a direct chat"
 		if cfg.PeerKind == "group" {
 			chatType = "a group chat"
+			if cfg.ChatTitle != "" {
+				// Sanitize: strip quotes/newlines, truncate to prevent prompt injection
+				// (group admins control the title).
+				title := strings.NewReplacer("\"", "", "\n", " ", "\r", "").Replace(cfg.ChatTitle)
+				if len([]rune(title)) > 100 {
+					title = string([]rune(title)[:100])
+				}
+				chatType = fmt.Sprintf("group chat \"%s\"", title)
+			}
 		}
 		lines = append(lines, fmt.Sprintf("You are a personal assistant running in %s (%s).", channelLabel, chatType))
 		lines = append(lines, "")
@@ -158,13 +171,24 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 			"",
 		)
 	} else if hasBootstrapFile(cfg.ContextFiles) {
-		// Predefined agents: full capabilities, but must prioritize bootstrap conversation
+		// Predefined agents: full capabilities, but MUST complete bootstrap
 		lines = append(lines,
 			"## FIRST RUN — MANDATORY",
 			"",
-			"BOOTSTRAP.md is loaded below in Project Context. This is your FIRST interaction with this user.",
-			"You MUST follow BOOTSTRAP.md instructions BEFORE doing anything else.",
-			"Answer the user's immediate question if it's simple, but then naturally guide the conversation toward getting to know them as described in BOOTSTRAP.md.",
+			"BOOTSTRAP.md is loaded below. This is your FIRST interaction with this user.",
+			"You MUST complete the onboarding described in BOOTSTRAP.md.",
+			"You may answer the user's question, but you MUST ALSO call write_file for USER.md and BOOTSTRAP.md before your response ends.",
+			"If the user's first message contains enough info (name, language, timezone), write USER.md immediately — do NOT wait for multiple turns.",
+			"",
+		)
+	} else if content := findContextFileContent(cfg.ContextFiles, bootstrap.UserFile); content != "" && !isUserFilePopulated(content) {
+		// BOOTSTRAP.md already cleaned up but USER.md is still blank — persistent nudge
+		lines = append(lines,
+			"## USER PROFILE INCOMPLETE",
+			"",
+			"USER.md exists but hasn't been filled in yet.",
+			"During conversation, naturally learn the user's name, language, and timezone.",
+			"Once you have this info, silently call write_file to update USER.md with their details.",
 			"",
 		)
 	}
@@ -228,7 +252,7 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 
 	// 6.4. ## Team Members — inject roster so agent knows who to assign tasks to
 	if !cfg.IsBootstrap && len(cfg.TeamMembers) > 0 {
-		lines = append(lines, buildTeamMembersSection(cfg.TeamMembers)...)
+		lines = append(lines, buildTeamMembersSection(cfg.TeamMembers, cfg.TeamGuidance)...)
 	}
 
 	// 6.5 ## Sandbox (matching TS sandboxInfo section) — skip during bootstrap
@@ -350,6 +374,27 @@ func buildToolingSection(toolNames []string, hasSandbox bool, shellDenyGroups ma
 			"You can install packages at runtime with `pip3 install <pkg>` or `npm install -g <pkg>` — no sudo needed.",
 		)
 	}
+	// Add media capabilities section when media tools are available.
+	hasMediaTools := false
+	for _, name := range toolNames {
+		if name == "read_image" || name == "read_video" || name == "read_audio" || name == "read_document" {
+			hasMediaTools = true
+			break
+		}
+	}
+	if hasMediaTools {
+		lines = append(lines,
+			"",
+			"### Media Files",
+			"When users send images, videos, audio, or documents, you see tags like:",
+			`  <media:image id="..." path="...">`,
+			`  <media:video id="...">, <media:audio id="...">, <media:document path="...">`,
+			"You MUST use the corresponding read_* tool (with the path or media_id) to analyze them.",
+			"You have full vision/audio/video capabilities through these tools.",
+			"NEVER say you cannot see images or files — always use the tools.",
+		)
+	}
+
 	lines = append(lines,
 		"",
 		"IMPORTANT: write_file content longer than ~12000 characters may be truncated by the API.",

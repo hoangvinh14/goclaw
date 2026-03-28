@@ -14,20 +14,19 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
-// buildEnsureUserFiles creates the per-user file seeding callback.
-// Seeds per-user context files on first chat (new user profile).
-func buildEnsureUserFiles(as store.AgentStore, configPermStore store.ConfigPermissionStore) agent.EnsureUserFilesFunc {
-	return func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace, channel string) (string, error) {
+// buildEnsureUserProfile creates the user profile resolution callback.
+// Creates/resolves user profile and returns effective workspace.
+// Separated from seeding to allow independent lifecycle management.
+func buildEnsureUserProfile(as store.AgentStore, configPermStore store.ConfigPermissionStore) agent.EnsureUserProfileFunc {
+	return func(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (string, bool, error) {
 		isNew, effectiveWs, err := as.GetOrCreateUserProfile(ctx, agentID, userID, workspace, channel)
 		if err != nil {
-			return effectiveWs, err
-		}
-		if !isNew {
-			return effectiveWs, nil // already profiled = already seeded
+			return effectiveWs, false, err
 		}
 
 		// Auto-add first group member as a file writer (bootstrap the allowlist).
-		if configPermStore != nil && (strings.HasPrefix(userID, "group:") || strings.HasPrefix(userID, "guild:")) {
+		// Only needed for truly new profiles — existing groups already have their writers.
+		if isNew && configPermStore != nil && (strings.HasPrefix(userID, "group:") || strings.HasPrefix(userID, "guild:")) {
 			senderID := store.SenderIDFromContext(ctx)
 			if senderID != "" {
 				parts := strings.SplitN(senderID, "|", 2)
@@ -47,12 +46,21 @@ func buildEnsureUserFiles(as store.AgentStore, configPermStore store.ConfigPermi
 				}); addErr != nil {
 					slog.Warn("failed to auto-add group file writer", "error", addErr, "sender", numericID, "group", userID)
 				}
-				// No bus broadcast needed — Grant already invalidates cache
 			}
 		}
 
-		_, err = bootstrap.SeedUserFiles(ctx, as, agentID, userID, agentType)
-		return effectiveWs, err
+		return effectiveWs, isNew, nil
+	}
+}
+
+// buildSeedUserFiles creates the context file seeding callback.
+// Seeds BOOTSTRAP.md, USER.md, etc. into user_context_files.
+// isNew=true seeds all files; isNew=false only seeds if user has zero files
+// (avoids re-seeding BOOTSTRAP.md after auto-cleanup on server restart).
+func buildSeedUserFiles(as store.AgentStore) agent.SeedUserFilesFunc {
+	return func(ctx context.Context, agentID uuid.UUID, userID, agentType string, isNew bool) error {
+		_, err := bootstrap.SeedUserFiles(ctx, as, agentID, userID, agentType, !isNew)
+		return err
 	}
 }
 
@@ -62,6 +70,18 @@ func buildEnsureUserFiles(as store.AgentStore, configPermStore store.ConfigPermi
 func buildBootstrapCleanup(as store.AgentStore) agent.BootstrapCleanupFunc {
 	return func(ctx context.Context, agentID uuid.UUID, userID string) error {
 		return as.DeleteUserContextFile(ctx, agentID, userID, bootstrap.BootstrapFile)
+	}
+}
+
+// buildCacheInvalidate creates a callback that invalidates the context file cache
+// for a user after SeedUserFiles writes via raw agentStore. Without this,
+// LoadContextFiles may return stale (empty) cached results on the first turn.
+func buildCacheInvalidate(intc *tools.ContextFileInterceptor) agent.CacheInvalidateFunc {
+	if intc == nil {
+		return nil
+	}
+	return func(agentID uuid.UUID, userID string) {
+		intc.InvalidateUser(agentID, userID)
 	}
 }
 

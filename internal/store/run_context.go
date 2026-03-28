@@ -51,6 +51,7 @@ type RunContext struct {
 	WorkspaceChannel string
 	WorkspaceChatID  string
 	TeamTaskID       string
+	LeaderAgentID    string // leader's agent UUID for member memory read fallback
 	AgentToolKey     string // tool-level agent key for registry routing
 }
 

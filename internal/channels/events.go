@@ -35,8 +35,11 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 		ctx = store.WithTenantID(ctx, ta.TenantID())
 	}
 
-	// Forward to StreamingChannel
-	if sc, ok := ch.(StreamingChannel); ok {
+	// Forward to StreamingChannel (only when streaming is enabled for this run).
+	// Without this gate, channels that implement StreamingChannel but have streaming
+	// disabled (e.g. group_stream=false) would create stream messages AND emit
+	// block.reply outbound messages, causing duplicate delivery.
+	if sc, ok := ch.(StreamingChannel); ok && rc.Streaming {
 		switch eventType {
 		case protocol.AgentEventRunStarted:
 			stream, err := sc.CreateStream(ctx, rc.ChatID, true)

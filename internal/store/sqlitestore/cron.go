@@ -1,0 +1,249 @@
+//go:build sqlite || sqliteonly
+
+package sqlitestore
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/adhocore/gronx"
+	"github.com/google/uuid"
+
+	"github.com/nextlevelbuilder/goclaw/internal/cron"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
+)
+
+const defaultCronCacheTTL = 2 * time.Minute
+
+// SQLiteCronStore implements store.CronStore backed by SQLite.
+type SQLiteCronStore struct {
+	db        *sql.DB
+	mu        sync.Mutex
+	baseCtx   context.Context
+	cancelCtx context.CancelFunc
+	onJob     func(job *store.CronJob) (*store.CronJobResult, error)
+	onEvent   func(event store.CronEvent)
+	running   bool
+	stop      chan struct{}
+
+	jobCache    []store.CronJob
+	cacheLoaded bool
+	cacheTime   time.Time
+	cacheTTL    time.Duration
+
+	retryCfg  cron.RetryConfig
+	defaultTZ string
+}
+
+func NewSQLiteCronStore(db *sql.DB) *SQLiteCronStore {
+	return &SQLiteCronStore{db: db, cacheTTL: defaultCronCacheTTL, retryCfg: cron.DefaultRetryConfig()}
+}
+
+func (s *SQLiteCronStore) SetRetryConfig(cfg cron.RetryConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retryCfg = cfg
+}
+
+func (s *SQLiteCronStore) SetDefaultTimezone(tz string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultTZ = tz
+}
+
+func (s *SQLiteCronStore) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return nil
+	}
+	s.baseCtx, s.cancelCtx = context.WithCancel(context.Background())
+	s.stop = make(chan struct{})
+	s.running = true
+	s.recomputeStaleJobs()
+	go s.runLoop()
+	slog.Info("sqlite cron service started")
+	return nil
+}
+
+func (s *SQLiteCronStore) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running {
+		return
+	}
+	close(s.stop)
+	if s.cancelCtx != nil {
+		s.cancelCtx()
+	}
+	s.running = false
+}
+
+func (s *SQLiteCronStore) SetOnJob(handler func(job *store.CronJob) (*store.CronJobResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onJob = handler
+}
+
+func (s *SQLiteCronStore) SetOnEvent(handler func(event store.CronEvent)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onEvent = handler
+}
+
+func (s *SQLiteCronStore) emitEvent(event store.CronEvent) {
+	s.mu.Lock()
+	fn := s.onEvent
+	s.mu.Unlock()
+	if fn != nil {
+		fn(event)
+	}
+}
+
+// --- Scan helpers ---
+
+type cronRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
+	var id uuid.UUID
+	var tenantID uuid.UUID
+	var agentID *uuid.UUID
+	var userID *string
+	var name, scheduleKind string
+	var enabled, deleteAfterRun bool
+	var cronExpr, tz, lastStatus, lastError *string
+	var runAt, nextRunAt, lastRunAt *time.Time
+	var intervalMS *int64
+	var payloadJSON []byte
+	var createdAt, updatedAt time.Time
+
+	err := row.Scan(&id, &tenantID, &agentID, &userID, &name, &enabled, &scheduleKind, &cronExpr, &runAt, &tz,
+		&intervalMS, &payloadJSON, &deleteAfterRun, &nextRunAt, &lastRunAt, &lastStatus, &lastError,
+		&createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload store.CronPayload
+	if len(payloadJSON) > 0 {
+		if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+			return nil, fmt.Errorf("failed to parse cron job payload: %w", err)
+		}
+	}
+
+	job := &store.CronJob{
+		ID:             id.String(),
+		TenantID:       tenantID,
+		Name:           name,
+		Enabled:        enabled,
+		Schedule:       store.CronSchedule{Kind: scheduleKind},
+		Payload:        payload,
+		CreatedAtMS:    createdAt.UnixMilli(),
+		UpdatedAtMS:    updatedAt.UnixMilli(),
+		DeleteAfterRun: deleteAfterRun,
+	}
+
+	if agentID != nil {
+		job.AgentID = agentID.String()
+	}
+	if userID != nil {
+		job.UserID = *userID
+	}
+	if cronExpr != nil {
+		job.Schedule.Expr = *cronExpr
+	}
+	if runAt != nil {
+		ms := runAt.UnixMilli()
+		job.Schedule.AtMS = &ms
+	}
+	if intervalMS != nil {
+		job.Schedule.EveryMS = intervalMS
+	}
+	if tz != nil {
+		job.Schedule.TZ = *tz
+	}
+	if nextRunAt != nil {
+		ms := nextRunAt.UnixMilli()
+		job.State.NextRunAtMS = &ms
+	}
+	if lastRunAt != nil {
+		ms := lastRunAt.UnixMilli()
+		job.State.LastRunAtMS = &ms
+	}
+	if lastStatus != nil {
+		job.State.LastStatus = *lastStatus
+	}
+	if lastError != nil {
+		job.State.LastError = *lastError
+	}
+
+	return job, nil
+}
+
+// computeNextRun calculates the next run time for a schedule.
+func computeNextRun(schedule *store.CronSchedule, now time.Time, defaultTZ string) *time.Time {
+	switch schedule.Kind {
+	case "at":
+		if schedule.AtMS != nil {
+			t := time.UnixMilli(*schedule.AtMS)
+			if t.After(now) {
+				return &t
+			}
+		}
+		return nil
+	case "every":
+		if schedule.EveryMS != nil && *schedule.EveryMS > 0 {
+			t := now.Add(time.Duration(*schedule.EveryMS) * time.Millisecond)
+			return &t
+		}
+		return nil
+	case "cron":
+		if schedule.Expr == "" {
+			return nil
+		}
+		tz := schedule.TZ
+		if tz == "" {
+			tz = defaultTZ
+		}
+		evalTime := now
+		if tz != "" {
+			if loc, err := time.LoadLocation(tz); err == nil {
+				evalTime = now.In(loc)
+			}
+		}
+		nextTime, err := gronx.NextTickAfter(schedule.Expr, evalTime, false)
+		if err != nil {
+			return nil
+		}
+		utcNext := nextTime.UTC()
+		return &utcNext
+	default:
+		return nil
+	}
+}
+
+func (s *SQLiteCronStore) scanJob(ctx context.Context, id uuid.UUID) (*store.CronJob, error) {
+	q := `SELECT id, tenant_id, agent_id, user_id, name, enabled, schedule_kind, cron_expression, run_at, timezone,
+		 interval_ms, payload, delete_after_run, next_run_at, last_run_at, last_status, last_error,
+		 created_at, updated_at FROM cron_jobs WHERE id = ?`
+	args := []any{id}
+
+	if !store.IsCrossTenant(ctx) {
+		tid := store.TenantIDFromContext(ctx)
+		if tid == uuid.Nil {
+			return nil, fmt.Errorf("tenant_id required")
+		}
+		q += " AND tenant_id = ?"
+		args = append(args, tid)
+	}
+
+	row := s.db.QueryRowContext(ctx, q, args...)
+	return scanCronRow(row)
+}

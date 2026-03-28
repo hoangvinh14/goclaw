@@ -24,8 +24,29 @@ import (
 // Bootstrap typically completes in 2-3 conversation turns.
 const bootstrapAutoCleanupTurns = 3
 
-// EnsureUserFilesFunc seeds per-user context files on first chat.
-// Returns the effective workspace path (from user_agent_profiles) for caching.
+// userSetup tracks per-user initialization state within a Loop instance.
+// Consolidates workspace resolution and context file seeding into one struct
+// to prevent desync between the two concerns.
+type userSetup struct {
+	workspace          string                 // effective workspace from user_agent_profiles (expanded, absolute)
+	seeded             bool                   // whether SeedUserFiles has been called this instance
+	fallbackBootstrap  []bootstrap.ContextFile // in-memory fallback when DB seed fails (e.g. SQLITE_BUSY)
+}
+
+// EnsureUserProfileFunc creates/resolves a user's profile and workspace.
+// Returns the effective workspace path from user_agent_profiles.
+// Does NOT seed context files — that's SeedUserFilesFunc's responsibility.
+type EnsureUserProfileFunc func(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (effectiveWorkspace string, isNew bool, err error)
+
+// SeedUserFilesFunc seeds per-user context files (BOOTSTRAP.md, USER.md, etc.).
+// Called once per user per Loop instance, independent of workspace.
+// isNew indicates whether the profile was just created (seed all) or already existed
+// (only seed if user has zero files — avoids re-seeding after BOOTSTRAP.md cleanup).
+type SeedUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType string, isNew bool) error
+
+// EnsureUserFilesFunc is the legacy combined callback (profile + seed + workspace).
+// Deprecated: use EnsureUserProfileFunc + SeedUserFilesFunc separately.
+// Kept for backward compatibility with existing callers during migration.
 type EnsureUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace, channel string) (effectiveWorkspace string, err error)
 
 // ContextFileLoaderFunc loads context files dynamically per-request.
@@ -34,6 +55,11 @@ type ContextFileLoaderFunc func(ctx context.Context, agentID uuid.UUID, userID, 
 // BootstrapCleanupFunc removes BOOTSTRAP.md after a successful first run.
 // Called automatically so the system doesn't rely on the LLM to delete it.
 type BootstrapCleanupFunc func(ctx context.Context, agentID uuid.UUID, userID string) error
+
+// CacheInvalidateFunc invalidates the context file cache for a user after seeding.
+// SeedUserFiles writes via raw agentStore (bypassing ContextFileInterceptor cache),
+// so this callback ensures LoadContextFiles sees the newly seeded files.
+type CacheInvalidateFunc func(agentID uuid.UUID, userID string)
 
 // Loop is the agent execution loop for one agent instance.
 // Think → Act → Observe cycle with tool execution.
@@ -75,11 +101,14 @@ type Loop struct {
 	hasMemory      bool
 	contextFiles   []bootstrap.ContextFile
 
-	// Per-user file seeding + dynamic context loading
-	ensureUserFiles   EnsureUserFilesFunc
+	// Per-user profile + file seeding + dynamic context loading
+	ensureUserProfile EnsureUserProfileFunc // create/resolve user profile + workspace
+	seedUserFiles     SeedUserFilesFunc     // seed context files (BOOTSTRAP.md, USER.md)
+	ensureUserFiles   EnsureUserFilesFunc   // legacy combined callback (fallback)
 	contextFileLoader ContextFileLoaderFunc
 	bootstrapCleanup  BootstrapCleanupFunc
-	userWorkspaces    sync.Map // userID → string (expanded workspace path from user_agent_profiles)
+	cacheInvalidate   CacheInvalidateFunc   // invalidate context file cache after seeding
+	userSetups sync.Map // userID → *userSetup (workspace + seeding state, per Loop instance)
 
 	// Compaction config (memory flush settings)
 	compactionCfg *config.CompactionConfig
@@ -222,10 +251,13 @@ type LoopConfig struct {
 	TenantID  uuid.UUID // agent's owning tenant — injected into execution context
 	AgentType string    // "open" or "predefined"
 
-	// Per-user file seeding + dynamic context loading
-	EnsureUserFiles   EnsureUserFilesFunc
+	// Per-user profile + file seeding + dynamic context loading
+	EnsureUserProfile EnsureUserProfileFunc // preferred: separate profile + workspace
+	SeedUserFiles     SeedUserFilesFunc     // preferred: separate context file seeding
+	EnsureUserFiles   EnsureUserFilesFunc   // legacy: combined (used when above are nil)
 	ContextFileLoader ContextFileLoaderFunc
 	BootstrapCleanup  BootstrapCleanupFunc
+	CacheInvalidate   CacheInvalidateFunc   // invalidate context file cache after seeding
 
 	// Tracing collector (nil = no tracing)
 	TraceCollector *tracing.Collector
@@ -336,9 +368,12 @@ func NewLoop(cfg LoopConfig) *Loop {
 		skillAllowList:         cfg.SkillAllowList,
 		hasMemory:              cfg.HasMemory,
 		contextFiles:           cfg.ContextFiles,
+		ensureUserProfile:      cfg.EnsureUserProfile,
+		seedUserFiles:          cfg.SeedUserFiles,
 		ensureUserFiles:        cfg.EnsureUserFiles,
 		contextFileLoader:      cfg.ContextFileLoader,
 		bootstrapCleanup:       cfg.BootstrapCleanup,
+		cacheInvalidate:        cfg.CacheInvalidate,
 		compactionCfg:          cfg.CompactionCfg,
 		contextPruningCfg:      cfg.ContextPruningCfg,
 		sandboxEnabled:         cfg.SandboxEnabled,
@@ -374,6 +409,7 @@ type RunRequest struct {
 	ForwardMedia      []bus.MediaFile // media files to forward to output (from delegation results)
 	Channel           string          // source channel instance name (e.g. "my-telegram-bot")
 	ChannelType       string          // platform type (e.g. "zalo_personal", "telegram") — for system prompt context
+	ChatTitle         string          // group chat display name (e.g. Telegram group title)
 	ChatID            string          // source chat ID
 	PeerKind          string          // "direct" or "group" (for session key building and tool context)
 	RunID             string          // unique run identifier
@@ -409,6 +445,7 @@ type RunRequest struct {
 	TeamID        string // team ID (if delegation is team-scoped)
 	TeamTaskID    string // team task ID (if delegation has an associated task)
 	ParentAgentID string // parent agent key that initiated the delegation
+	LeaderAgentID string // leader agent UUID for member memory read fallback
 
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string

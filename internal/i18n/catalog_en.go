@@ -95,6 +95,7 @@ func init() {
 
 		// Channels
 		MsgCannotDeleteDefaultInst: "cannot delete default channel instance",
+		MsgCannotRemoveLastWriter:  "cannot remove the last file writer",
 
 		// Skills
 		MsgSkillsUpdateNotSupported: "skills.update not supported for file-based skills",

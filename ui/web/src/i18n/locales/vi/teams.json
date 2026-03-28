@@ -310,6 +310,7 @@
     "noActiveAgents": "Không tìm thấy agent hoạt động. Hãy tạo agent trước.",
     "members": "Thành viên",
     "membersTooltip": "Chỉ có agent được định nghĩa sẵn mới có thể được thêm vào nhóm. Agent mở là per-user và thiếu ngữ cảnh dùng chung.",
+    "needMembers": "Chọn ít nhất 1 thành viên cho nhóm",
     "searchMembers": "Tìm kiếm và thêm thành viên...",
     "displayName": "Tên hiển thị",
     "displayNamePlaceholder": "Support Team",

@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
-	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/safego"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -65,7 +65,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	// buildMessages resolves context files once and also detects BOOTSTRAP.md presence
 	// (hadBootstrap) — no extra DB roundtrip needed for bootstrap detection.
-	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.ChannelType, req.PeerKind, req.UserID, req.HistoryLimit, req.SkillFilter, req.LightContext)
+	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.ChannelType, req.ChatTitle, req.PeerKind, req.UserID, req.HistoryLimit, req.SkillFilter, req.LightContext)
 
 	// 1b. Determine image routing strategy.
 	// If read_image tool has a dedicated vision provider, images are NOT attached inline
@@ -89,25 +89,27 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				imageFiles = append(imageFiles, bus.MediaFile{Path: ref.Path, MimeType: ref.MimeType})
 			}
 		}
-		if images := loadImages(imageFiles); len(images) > 0 {
-			if deferToReadImageTool {
-				// Tool mode: store in context only — agent calls read_image tool.
+		if deferToReadImageTool {
+			// File-ref mode: images primarily accessed via read_image(path=...).
+			// Still load into context as fallback — if LLM omits the path param,
+			// read_image can fall back to context images. This costs Go memory
+			// but NOT LLM tokens (base64 is in Go context, not sent to provider).
+			if images := loadImages(imageFiles); len(images) > 0 {
 				ctx = tools.WithMediaImages(ctx, images)
-				slog.Info("vision: deferring to read_image tool", "count", len(images), "agent", l.id)
-			} else {
-				// Inline mode: attach to message + context.
-				messages[len(messages)-1].Images = images
-				ctx = tools.WithMediaImages(ctx, images)
-				slog.Info("vision: attached images inline to main provider", "count", len(images), "agent", l.id)
 			}
+			slog.Info("vision: file-ref mode, images accessible via read_image tool",
+				"count", len(imageFiles), "agent", l.id)
+		} else if images := loadImages(imageFiles); len(images) > 0 {
+			// Inline mode: read files, base64 encode, attach to message + context.
+			messages[len(messages)-1].Images = images
+			ctx = tools.WithMediaImages(ctx, images)
+			slog.Info("vision: attached images inline to main provider", "count", len(images), "agent", l.id)
 		}
 	}
 
 	// 2a. Load historical images into context for read_image tool.
-	// Without this, read_image can only see current-turn images, not previous turns.
-	// Both inline and tool-deferred modes need this — inline mode attaches images to
-	// messages for the main LLM, but the read_image tool also needs context access
-	// to analyze historical images on demand.
+	// Both modes need this: inline mode for main LLM, file-ref mode as fallback
+	// when LLM calls read_image without the path param.
 	if l.mediaStore != nil {
 		ctx = l.loadHistoricalImagesForTool(ctx, mediaRefs, messages)
 	}
@@ -177,6 +179,12 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// 2e. Enrich <media:image> tags with persisted media IDs so the LLM
 	// knows images were received and stored (consistent with audio/video enrichment).
 	l.enrichImageIDs(messages, mediaRefs)
+
+	// 2e-ii. In file-ref mode, enrich ALL user messages' image tags with file paths.
+	// This enables read_image(path=...) for both current and historical images.
+	if deferToReadImageTool {
+		l.enrichImagePaths(messages)
+	}
 
 	// 2f. Collect all media file paths for team workspace auto-collect.
 	// When the leader calls team_tasks(create), these paths are copied to the
@@ -287,12 +295,22 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// 3. Buffer new messages — write to session only AFTER the run completes.
 	// This prevents concurrent runs from seeing each other's in-progress messages.
 	// NOTE: pendingMsgs stores text + lightweight MediaRefs (not base64 images).
-	// Initialized here before rs is created; moved to rs after construction.
+	// Use enriched content (with media IDs and paths) from the messages array
+	// instead of raw req.Message, so historical messages retain full refs (RC-1 fix).
 	var initPendingMsgs []providers.Message
 	if !req.HideInput {
+		enrichedContent := req.Message
+		if len(messages) > 0 {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					enrichedContent = messages[i].Content
+					break
+				}
+			}
+		}
 		initPendingMsgs = append(initPendingMsgs, providers.Message{
 			Role:      "user",
-			Content:   req.Message,
+			Content:   enrichedContent,
 			MediaRefs: mediaRefs,
 		})
 	}
@@ -503,6 +521,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				providers.OptWorkspace:   tools.ToolWorkspaceFromCtx(ctx),
 			},
 		}
+		if tid := store.TenantIDFromContext(ctx); tid != uuid.Nil {
+			chatReq.Options[providers.OptTenantID] = tid.String()
+		}
 		if l.thinkingLevel != "" && l.thinkingLevel != "off" {
 			if tc, ok := l.provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
 				chatReq.Options[providers.OptThinkingLevel] = l.thinkingLevel
@@ -523,11 +544,12 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		var resp *providers.ChatResponse
 		var err error
 
+		callCtx := providers.WithChatGPTOAuthRoutingObservation(ctx, providers.NewChatGPTOAuthRoutingObservation())
 		llmSpanStart := time.Now().UTC()
-		llmSpanID := l.emitLLMSpanStart(ctx, llmSpanStart, rs.iteration, messages)
+		llmSpanID := l.emitLLMSpanStart(callCtx, llmSpanStart, rs.iteration, messages)
 
 		if req.Stream {
-			resp, err = l.provider.ChatStream(ctx, chatReq, func(chunk providers.StreamChunk) {
+			resp, err = l.provider.ChatStream(callCtx, chatReq, func(chunk providers.StreamChunk) {
 				if chunk.Thinking != "" {
 					emitRun(AgentEvent{
 						Type:    protocol.ChatEventThinking,
@@ -546,15 +568,15 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				}
 			})
 		} else {
-			resp, err = l.provider.Chat(ctx, chatReq)
+			resp, err = l.provider.Chat(callCtx, chatReq)
 		}
 
 		if err != nil {
-			l.emitLLMSpanEnd(ctx, llmSpanID, llmSpanStart, nil, err)
+			l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, nil, err)
 			return nil, fmt.Errorf("LLM call failed (iteration %d): %w", rs.iteration, err)
 		}
 
-		l.emitLLMSpanEnd(ctx, llmSpanID, llmSpanStart, resp, nil)
+		l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, resp, nil)
 
 		// For non-streaming responses, emit thinking and content as single events
 		if !req.Stream {

@@ -140,7 +140,7 @@ func (t *CreateVideoTool) Execute(ctx context.Context, args map[string]any) *Res
 		slog.Info("create_video: file saved", "path", videoPath, "size", fi.Size(), "data_len", len(chainResult.Data))
 	}
 
-	result := &Result{ForLLM: fmt.Sprintf("MEDIA:%s", videoPath)}
+	result := &Result{ForLLM: fmt.Sprintf("MEDIA:%s\nUse the EXACT filename when referencing: %s", videoPath, filepath.Base(videoPath))}
 	result.Media = []bus.MediaFile{{Path: videoPath, MimeType: "video/mp4"}}
 	result.Deliverable = fmt.Sprintf("[Generated video: %s]\nPrompt: %s", filepath.Base(videoPath), prompt)
 	result.Provider = chainResult.Provider

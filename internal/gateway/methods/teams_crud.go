@@ -260,8 +260,10 @@ func (m *TeamsMethods) handleTaskActiveBySession(ctx context.Context, client *ga
 // --- Update (settings) ---
 
 type teamsUpdateParams struct {
-	TeamID   string         `json:"teamId"`
-	Settings map[string]any `json:"settings"`
+	TeamID      string         `json:"teamId"`
+	Name        string         `json:"name,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Settings    map[string]any `json:"settings"`
 }
 
 func (m *TeamsMethods) handleUpdate(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
@@ -333,6 +335,12 @@ func (m *TeamsMethods) handleUpdate(ctx context.Context, client *gateway.Client,
 	cleaned, _ := json.Marshal(access)
 
 	updates := map[string]any{"settings": json.RawMessage(cleaned)}
+	if params.Name != "" {
+		updates["name"] = params.Name
+	}
+	if params.Description != nil {
+		updates["description"] = *params.Description
+	}
 	if err := m.teamStore.UpdateTeam(ctx, teamID, updates); err != nil {
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToUpdate, "team", err.Error())))
 		return

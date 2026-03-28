@@ -1,0 +1,253 @@
+//go:build sqlite || sqliteonly
+
+package sqlitestore
+
+import (
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/nextlevelbuilder/goclaw/internal/cron"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
+)
+
+func (s *SQLiteCronStore) GetDueJobs(now time.Time) []store.CronJob {
+	s.mu.Lock()
+	if !s.cacheLoaded || time.Since(s.cacheTime) > s.cacheTTL {
+		s.refreshJobCache()
+	}
+	jobs := s.jobCache
+	s.mu.Unlock()
+
+	var due []store.CronJob
+	for i := range jobs {
+		if jobs[i].Enabled && jobs[i].State.NextRunAtMS != nil {
+			nextRun := time.UnixMilli(*jobs[i].State.NextRunAtMS)
+			if !nextRun.After(now) {
+				due = append(due, jobs[i])
+			}
+		}
+	}
+	return due
+}
+
+// refreshJobCache reloads all enabled jobs from DB. Must be called with mu held.
+func (s *SQLiteCronStore) refreshJobCache() {
+	rows, err := s.db.QueryContext(s.baseCtx,
+		`SELECT id, tenant_id, agent_id, user_id, name, enabled, schedule_kind, cron_expression, run_at, timezone,
+		 interval_ms, payload, delete_after_run, next_run_at, last_run_at, last_status, last_error,
+		 created_at, updated_at FROM cron_jobs WHERE enabled = 1`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	s.jobCache = nil
+	for rows.Next() {
+		job, err := scanCronRow(rows)
+		if err != nil {
+			continue
+		}
+		s.jobCache = append(s.jobCache, *job)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("cron: cache refresh iteration error", "error", err)
+	}
+	s.cacheLoaded = true
+	s.cacheTime = time.Now()
+}
+
+// InvalidateCache forces a cache refresh on the next GetDueJobs call.
+func (s *SQLiteCronStore) InvalidateCache() {
+	s.mu.Lock()
+	s.cacheLoaded = false
+	s.mu.Unlock()
+}
+
+// recomputeStaleJobs fixes enabled jobs with next_run_at = NULL on startup.
+func (s *SQLiteCronStore) recomputeStaleJobs() {
+	rows, err := s.db.QueryContext(s.baseCtx,
+		`SELECT id, schedule_kind, cron_expression, run_at, timezone, interval_ms
+		 FROM cron_jobs WHERE enabled = 1 AND next_run_at IS NULL`)
+	if err != nil {
+		slog.Warn("cron: failed to query stale jobs", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var fixed int
+	for rows.Next() {
+		var id uuid.UUID
+		var scheduleKind string
+		var cronExpr, tz *string
+		var runAt *time.Time
+		var intervalMS *int64
+
+		if err := rows.Scan(&id, &scheduleKind, &cronExpr, &runAt, &tz, &intervalMS); err != nil {
+			continue
+		}
+
+		schedule := store.CronSchedule{Kind: scheduleKind}
+		if cronExpr != nil {
+			schedule.Expr = *cronExpr
+		}
+		if runAt != nil {
+			ms := runAt.UnixMilli()
+			schedule.AtMS = &ms
+		}
+		if intervalMS != nil {
+			schedule.EveryMS = intervalMS
+		}
+		if tz != nil {
+			schedule.TZ = *tz
+		}
+
+		next := computeNextRun(&schedule, now, s.defaultTZ)
+		if next == nil {
+			if scheduleKind == "at" {
+				s.db.ExecContext(s.baseCtx, "UPDATE cron_jobs SET enabled = 0, updated_at = ? WHERE id = ?", now, id)
+			}
+			continue
+		}
+
+		s.db.ExecContext(s.baseCtx, "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ?", *next, now, id)
+		fixed++
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("cron: recompute stale iteration error", "error", err)
+	}
+
+	if fixed > 0 {
+		slog.Info("cron: recomputed stale next_run_at on startup", "fixed", fixed)
+	}
+}
+
+func (s *SQLiteCronStore) runLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticker.C:
+			s.checkAndRunDueJobs()
+		}
+	}
+}
+
+func (s *SQLiteCronStore) checkAndRunDueJobs() {
+	dueJobs := s.GetDueJobs(time.Now())
+	if len(dueJobs) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	handler := s.onJob
+	s.mu.Unlock()
+
+	if handler == nil {
+		return
+	}
+
+	// Clear next_run for all due jobs first to prevent duplicate fires.
+	for _, job := range dueJobs {
+		if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+			s.db.ExecContext(s.baseCtx, "UPDATE cron_jobs SET next_run_at = NULL WHERE id = ?", id)
+		}
+	}
+
+	// Execute jobs in parallel — scheduler enforces per-session serialization.
+	var wg sync.WaitGroup
+	for _, job := range dueJobs {
+		wg.Add(1)
+		go func(job store.CronJob) {
+			defer wg.Done()
+			s.executeOneJob(job, handler)
+		}(job)
+	}
+	wg.Wait()
+
+	s.mu.Lock()
+	s.cacheLoaded = false
+	s.mu.Unlock()
+}
+
+// executeOneJob runs a single cron job with retry, logs the result, and updates next_run_at.
+func (s *SQLiteCronStore) executeOneJob(job store.CronJob, handler func(job *store.CronJob) (*store.CronJobResult, error)) {
+	startTime := time.Now()
+
+	var lastResult *store.CronJobResult
+	resultStr, attempts, err := cron.ExecuteWithRetry(func() (string, error) {
+		r, e := handler(&job)
+		if e != nil {
+			return "", e
+		}
+		lastResult = r
+		if r != nil {
+			return r.Content, nil
+		}
+		return "", nil
+	}, s.retryCfg)
+
+	durationMS := time.Since(startTime).Milliseconds()
+
+	if attempts > 1 {
+		slog.Info("cron job retried", "id", job.ID, "attempts", attempts, "success", err == nil)
+	}
+
+	now := time.Now()
+	status := "ok"
+	var lastError *string
+	if err != nil {
+		status = "error"
+		errStr := err.Error()
+		lastError = &errStr
+	}
+
+	var inputTokens, outputTokens int
+	if lastResult != nil {
+		inputTokens = lastResult.InputTokens
+		outputTokens = lastResult.OutputTokens
+	}
+
+	logID := uuid.Must(uuid.NewV7())
+	var summary *string
+	if err == nil {
+		truncated := cron.TruncateOutput(resultStr)
+		summary = &truncated
+	}
+	if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+		var agentUUID *uuid.UUID
+		if aid, aidErr := uuid.Parse(job.AgentID); aidErr == nil {
+			agentUUID = &aid
+		}
+		s.db.ExecContext(s.baseCtx,
+			`INSERT INTO cron_run_logs (id, job_id, agent_id, status, error, summary, duration_ms, input_tokens, output_tokens, ran_at)
+			 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			logID, id, agentUUID, status, lastError, summary, durationMS, inputTokens, outputTokens, now,
+		)
+	}
+
+	if job.DeleteAfterRun {
+		if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+			s.db.ExecContext(s.baseCtx, "DELETE FROM cron_jobs WHERE id = ?", id)
+		}
+	} else if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+		schedule := job.Schedule
+		next := computeNextRun(&schedule, now, s.defaultTZ)
+		s.db.ExecContext(s.baseCtx,
+			"UPDATE cron_jobs SET last_run_at = ?, last_status = ?, last_error = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
+			now, status, lastError, next, now, id,
+		)
+	}
+
+	evt := store.CronEvent{Action: "completed", JobID: job.ID, JobName: job.Name, UserID: job.UserID, Status: status}
+	if err != nil {
+		evt.Action = "error"
+		evt.Error = err.Error()
+	}
+	s.emitEvent(evt)
+}

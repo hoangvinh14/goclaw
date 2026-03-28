@@ -627,6 +627,53 @@ Codex provider reports `SupportsThinking() = true`, allowing thinking_level to b
 
 Tracks prompt, completion, and total tokens. `CacheCreationTokens` and `CacheReadTokens` are supported for prompt caching if available.
 
+### Provider-Level Defaults + Agent Overrides
+
+Multiple authenticated `chatgpt_oauth` providers can coexist in one tenant. Each provider name is one OpenAI Codex OAuth alias. Pool membership is authoritative at the provider layer: one alias owns the reusable pool, while member aliases stay leaf accounts.
+
+Provider default example:
+
+```json
+{
+  "name": "openai-codex",
+  "provider_type": "chatgpt_oauth",
+  "settings": {
+    "codex_pool": {
+      "strategy": "round_robin",
+      "extra_provider_names": ["codex-work"]
+    }
+  }
+}
+```
+
+Agent override example:
+
+```json
+{
+  "provider": "openai-codex",
+  "other_config": {
+    "chatgpt_oauth_routing": {
+      "override_mode": "custom",
+      "strategy": "round_robin"
+    }
+  }
+}
+```
+
+Routing behavior:
+- The main `provider` field remains the preferred/default account.
+- Provider aliases are arbitrary. `openai-codex` and `codex-work` are examples, not required prefixes.
+- `settings.codex_pool.extra_provider_names` is the authoritative membership list for that pool owner.
+- A provider listed in another pool cannot also manage its own pool.
+- `override_mode: "inherit"` uses the primary provider's `settings.codex_pool`.
+- `override_mode: "custom"` is limited to routing behavior for that provider-owned pool.
+- `primary_first` keeps the preferred account fixed. When saved as a custom override with no extra names, it disables the pool for that agent and keeps the agent on the primary account only.
+- `round_robin` rotates requests across the preferred account plus the provider-owned extra authenticated OpenAI Codex OAuth accounts.
+- `priority_order` tries the preferred account first, then drains the provider-owned extra accounts in order.
+- Retryable upstream failures can fall through to the next eligible OpenAI Codex OAuth account in the same request.
+- Explicit provider names remain explicit. OAuth auth/logout is still provider-scoped.
+- Runtime observability for one agent is available at `GET /v1/agents/{id}/codex-pool-activity`, which exposes recent routed traces plus per-alias health derived from those traces.
+
 ---
 
 ## 14. File Reference
@@ -652,6 +699,7 @@ Tracks prompt, completion, and total tokens. `CacheCreationTokens` and `CacheRea
 | `internal/providers/codex.go` | CodexProvider: OAuth-based ChatGPT Responses API |
 | `internal/providers/codex_build.go` | Codex request builder: message formatting, phase handling |
 | `internal/providers/codex_types.go` | Codex request/response types and OAuth token management |
+| `internal/providers/chatgpt_oauth_router.go` | Agent-side routing across multiple authenticated OpenAI Codex OAuth providers |
 | `internal/providers/dashscope.go` | DashScope provider: OpenAI-compat wrapper with thinking budget, tools+streaming fallback |
 | `internal/providers/acp_provider.go` | ACPProvider: orchestrates ACP-compatible agent subprocesses |
 | `internal/providers/acp/types.go` | ACP protocol types: InitializeRequest, SessionUpdate, ContentBlock, etc. |

@@ -16,6 +16,23 @@ import (
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
+// ============================================================
+// TeamToolBackend exported wrappers (dispatch layer)
+// ============================================================
+
+func (m *TeamToolManager) DispatchTaskToAgent(ctx context.Context, task *store.TeamTaskData, team *store.TeamData, agentID uuid.UUID) {
+	m.dispatchTaskToAgent(ctx, task, team, agentID)
+}
+func (m *TeamToolManager) BuildBlockerResultsSummary(ctx context.Context, task *store.TeamTaskData) string {
+	return m.buildBlockerResultsSummary(ctx, task)
+}
+func (m *TeamToolManager) BuildRecentCommentsSummary(ctx context.Context, taskID uuid.UUID) string {
+	return m.buildRecentCommentsSummary(ctx, taskID)
+}
+func (m *TeamToolManager) RestoreTraceContext(ctx context.Context, task *store.TeamTaskData) context.Context {
+	return m.restoreTraceContext(ctx, task)
+}
+
 // maxTaskDispatches is the max number of times a single task can be dispatched
 // before it auto-fails. Prevents infinite loops when agents can't complete a task.
 const maxTaskDispatches = 3
@@ -76,31 +93,32 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 		return
 	}
 
-	content := fmt.Sprintf("[Assigned task #%d (id: %s)]: %s", task.TaskNumber, task.ID, task.Subject)
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("[Assigned task #%d (id: %s)]: %s", task.TaskNumber, task.ID, task.Subject))
 	if task.Description != "" {
-		content += "\n\n" + task.Description
+		content.WriteString("\n\n" + task.Description)
 	}
 	// Hint: tell the agent it's on a team task and where the shared workspace is.
 	if ws := taskTeamWorkspace(task); ws != "" {
-		content += fmt.Sprintf("\n\n[Team workspace: %s — use read_file/write_file/list_files to access shared files. All files you write are visible to the team lead and other members.]", ws)
+		content.WriteString(fmt.Sprintf("\n\n[Team workspace: %s — use read_file/write_file/list_files to access shared files. All files you write are visible to the team lead and other members.]", ws))
 	}
 	// List attached files so member knows what's available to read.
 	if files, ok := task.Metadata["attached_files"].([]any); ok && len(files) > 0 {
-		content += "\n\n[Attached files in team workspace — use read_file to access:]"
+		content.WriteString("\n\n[Attached files in team workspace — use read_file to access:]")
 		for _, f := range files {
 			if path, ok := f.(string); ok {
-				content += "\n- attachments/" + filepath.Base(path)
+				content.WriteString("\n- attachments/" + filepath.Base(path))
 			}
 		}
 	}
 
 	// Hint: guide member on available team_tasks actions.
-	content += "\n\n[Instructions]\n" +
+	content.WriteString("\n\n[Instructions]\n" +
 		"- Use team_tasks(action=\"progress\", percent=N, text=\"...\") to report progress\n" +
 		"- Use team_tasks(action=\"comment\", text=\"...\") to share findings\n" +
 		"- Use team_tasks(action=\"comment\", type=\"blocker\", text=\"...\") when BLOCKED and need leader input — auto-fails task and notifies leader\n" +
 		"- When done: team_tasks(action=\"complete\", result=\"summary of your work\")\n" +
-		"- Write output files to team workspace so lead can review"
+		"- Write output files to team workspace so lead can review")
 
 	// Use task's stored channel/chat as primary source for routing.
 	// Falls back to ctx values for initial dispatch (task just created, fields match ctx).
@@ -140,11 +158,11 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 		"origin_peer_kind": originPeerKind,
 		"origin_chat_id":   originChatID,
 		"origin_user_id":   originUserID,
-		"from_agent":          fromAgent,
-		"to_agent":            ag.AgentKey,
-		"to_agent_display":    ag.DisplayName,
-		"team_task_id":        task.ID.String(),
-		"team_id":             teamID.String(),
+		"from_agent":       fromAgent,
+		"to_agent":         ag.AgentKey,
+		"to_agent_display": ag.DisplayName,
+		"team_task_id":     task.ID.String(),
+		"team_id":          teamID.String(),
 	}
 	// Resolve local key from context; fallback to task metadata for deferred dispatches.
 	localKey := ToolLocalKeyFromCtx(ctx)
@@ -167,6 +185,8 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 	if originSessionKey != "" {
 		meta["origin_session_key"] = originSessionKey
 	}
+	// Pass leader agent ID so member agents can fallback-read leader's memory.
+	meta["leader_agent_id"] = team.LeadAgentID.String()
 	// Pass the team workspace dir so member agents write files to the shared folder.
 	if ws := taskTeamWorkspace(task); ws != "" {
 		meta["team_workspace"] = ws
@@ -184,7 +204,7 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 		Channel:  "system",
 		SenderID: "teammate:dashboard",
 		ChatID:   teamID.String(),
-		Content:  content,
+		Content:  content.String(),
 		UserID:   originUserID,
 		TenantID: store.TenantIDFromContext(ctx),
 		AgentID:  ag.AgentKey,

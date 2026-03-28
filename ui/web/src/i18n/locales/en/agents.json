@@ -124,6 +124,253 @@
     "saved": "Saved",
     "failedToSave": "Failed to save"
   },
+  "chatgptOAuthRouting": {
+    "title": "Codex OAuth Pool",
+    "description": "Edit the saved pool, then check it live.",
+    "defaultAccount": "Primary Account",
+    "defaultHint": "The agent Provider field stays pinned to the primary alias.",
+    "badge": "Codex pool",
+    "badgeTooltip": "This agent can route Codex traffic across multiple OpenAI OAuth aliases.",
+    "summaryTitle": "OpenAI Account Pool",
+    "summaryDescription": "See the effective OpenAI Codex pool for this agent. Pool members are managed on the provider; this page only controls routing behavior.",
+    "strategyLabel": "Traffic Policy",
+    "strategyHint": "Primary First keeps the primary alias first. Round Robin rotates across all ready accounts. Priority Order drains accounts in the listed order after the primary alias.",
+    "extraAccountsLabel": "Extra Accounts",
+    "availableExtraAccountsLabel": "Available Extra Accounts",
+    "poolMembershipLabel": "Pool Membership",
+    "extraHint": "Only enabled and signed-in OpenAI Codex OAuth aliases can participate.",
+    "emptyExtras": "Sign in another OpenAI Codex OAuth alias to unlock pooling.",
+    "noReadyExtras": "Sign in and enable another OpenAI Codex OAuth alias to add it here.",
+    "extraSelectableHint": "Only enabled, signed-in OpenAI Codex OAuth aliases can enter the active pool.",
+    "selectedAccountsLabel": "Accounts in Pool",
+    "emptySelected": "No extra pool members selected yet.",
+    "manageAction": "Open Pool",
+    "singleAccountHint": "Configure another named OpenAI Codex OAuth provider on the Providers page to create a provider-owned pool.",
+    "membershipManagedAtProvider": "Pool members are managed on provider {{provider}}. Change membership there, then come back here to tune routing behavior.",
+    "membershipConfigureProviderFirst": "No provider-owned pool is saved on {{provider}} yet. Configure pool members there before enabling pooled routing for this agent.",
+    "readySummary": "{{ready}} of {{total}} extra accounts are ready.",
+    "preferredNeedsAttention": "The primary account needs attention before this agent can use it reliably.",
+    "loadingAccounts": "Checking OpenAI Codex OAuth account status...",
+    "attentionTitle": "Accounts Needing Attention",
+    "attentionHint": "Selected accounts that are disabled or signed out stay visible here until you remove them or sign in again.",
+    "pageTitle": "OpenAI Account Pool",
+    "pageDescription": "Review the live OpenAI Codex pool for {{name}}, then choose whether this agent inherits provider defaults, keeps the primary account only, or tunes the routing strategy.",
+    "backToAgent": "Back To Agent",
+    "openProviders": "Open Providers",
+    "pageUnsupportedTitle": "This agent is not using an OpenAI Codex OAuth provider",
+    "pageUnsupportedDescription": "Set the agent Provider to an OpenAI Codex OAuth alias first, then return here to manage the pool.",
+    "providerAccessTitle": "Provider management is admin-only",
+    "providerAccessDescription": "You can inspect the live pool here, but only an admin can sign accounts in, add aliases, or open the Providers pages.",
+    "providerAccessInline": "Only admins can sign in new aliases or manage the Providers page.",
+    "unsavedChangesTitle": "Draft changes are not live yet",
+    "unsavedChangesDescription": "The verification cards below reflect the last saved pool. Save this draft before using the evidence to validate round robin.",
+    "draftBadge": "Draft pending",
+    "savedPoolOnlyHint": "Live evidence still reflects the last saved pool.",
+    "verificationTitle": "How verification works",
+    "verificationDescription": "Evidence comes from recent LLM spans for this agent. Refresh this page after a few requests to compare the configured pool with the aliases that were actually used.",
+    "addPoolMembersTitle": "Add more aliases to this pool",
+    "addPoolMembersDescription": "Create more OpenAI Codex OAuth aliases on the Providers page, then return here to add them to this agent.",
+    "needsAttentionTitle": "Needs Attention",
+    "needsAttentionDescription": "{{count}} pool aliases are disabled or need sign-in before you can rely on them.",
+    "never": "Never",
+    "requestCount": "{{count}} recent requests",
+    "lastUsedAt": "Last used {{value}}",
+    "openProvider": "Open Provider",
+    "activityTitle": "Live Routing",
+    "activityDescription": "Runtime health and live routing proof.",
+    "refreshEvidence": "Refresh Live State",
+    "recentRequestsCount": "{{count}} recent requests",
+    "observedProviders": "{{observed}} of {{total}} accounts used directly",
+    "failoverOnlyProviders": "{{count}} aliases seen only via failover",
+    "selectedCountLabel": "{{count}} direct uses",
+    "failoverServeCount": "{{count}} failover serves",
+    "failoverOnlyLabel": "Failover only",
+    "switchRate": "{{switches}} provider switches across {{total}} request hops",
+    "poolMembersTitle": "Pool Accounts",
+    "poolMembersDescription": "Role, route state, recent proof, and quota.",
+    "sequenceTitle": "Recent Requests",
+    "sequenceColumns": {
+      "step": "#",
+      "account": "Account",
+      "route": "Route",
+      "when": "When",
+      "duration": "Time"
+    },
+    "sequenceDescription": "Recent proof from routed Codex calls.",
+    "sequenceEmptyTitle": "No recent proof yet",
+    "loadingEvidence": "Loading recent Codex routing evidence...",
+    "unknownModel": "Unknown model",
+    "attemptCount": "Attempts {{count}}",
+    "selectedProviderBadge": "Selected {{provider}}",
+    "servedProviderBadge": "Served {{provider}}",
+    "failoverHint": "Retryable failure fell through to: {{providers}}",
+    "traceAction": "Trace",
+    "openTrace": "Open Trace",
+    "noEvidence": "Send a few Codex requests, then refresh.",
+    "selectedCount": "{{count}} in pool",
+    "productLabel": "ChatGPT Subscription (OAuth)",
+    "controlTitle": "Pool Setup",
+    "controlDescription": "Pool members are managed on the provider. This page controls whether the agent inherits that pool, stays on the primary account, or overrides the routing strategy.",
+    "mode": {
+      "label": "Agent Routing Mode",
+      "inherit": "Use Provider Defaults",
+      "custom": "Custom For This Agent",
+      "noProviderDefault": "No provider-owned pool is saved yet. Configure reusable pool members on the Providers page first, or keep this agent on its primary account.",
+      "providerDefaultSummary": "{{count}} accounts in provider default",
+      "summaryInherited": "This agent currently follows the provider default pool.",
+      "summaryCustom": "This agent currently saves its own routing override for the provider-owned pool."
+    },
+    "poolStateTitle": "Pool State",
+    "routerActiveTitle": "Router Active",
+    "fallbackTitle": "Fallback Only",
+    "blockedNowTitle": "Blocked Now",
+    "checkingTitle": "Checking",
+    "emptyGroup": "None",
+    "viewerMode": "View only",
+    "consoleSummary": "{{active}} active · {{observed}} used directly · {{blocked}} blocked",
+    "monitorDirectLabel": "Direct",
+    "monitorDirectUseLabel": "Direct Hits",
+    "monitorFailoverLabel": "Failover",
+    "lastSeenLabel": "Last Seen",
+    "sampleBadge": "{{count}} traced spans",
+    "noSampleBadge": "No recent sample",
+    "runtimeHealthTitle": "Runtime Health",
+    "runtimeHealthSummary": "{{rate}}% success · score {{score}}",
+    "noRuntimeSample": "No recent runtime sample yet.",
+    "failureStreakBadge": "{{count}} failing now",
+    "runtimeSuccessCompact": "Success {{count}}",
+    "runtimeFailureCompact": "Failed {{count}}",
+    "lastSuccessLabel": "Last ok {{value}}",
+    "lastFailureLabel": "Last fail {{value}}",
+    "healthState": {
+      "healthy": "Healthy",
+      "degraded": "Degraded",
+      "critical": "Critical",
+      "idle": "Idle"
+    },
+    "checkpoints": {
+      "configured": "Configured",
+      "ready": "Ready",
+      "observed": "Used Directly",
+      "switching": "Switching"
+    },
+    "nextActionTitle": "Next Action",
+    "nextAction": {
+      "saveTitle": "Save the draft before trusting the evidence",
+      "saveDescription": "The saved pool and the draft have diverged. Persist the current configuration first, then validate live traffic.",
+      "attentionTitle": "Fix the aliases needing attention",
+      "attentionDescription": "Disabled or signed-out aliases stay visible so you can re-auth them or remove them from the pool.",
+      "quotaTitle": "Fix quota blockers before trusting round robin",
+      "quotaDescription": "{{count}} signed-in aliases do not currently show usable quota.",
+      "failoverOnlyTitle": "Inspect aliases that only appear after failover",
+      "failoverOnlyDescription": "{{count}} aliases have recent traffic only as failover targets, not as direct round-robin selections yet.",
+      "addMembersTitle": "Add another signed-in alias to unlock real pooling",
+      "addMembersDescription": "Round robin becomes meaningful once more than one ready alias can participate.",
+      "verifyTitle": "Send a few more Codex requests and refresh evidence",
+      "verifyDescription": "The pool is saved and ready, but recent routed calls have not yet shown direct selection across every ready alias.",
+      "healthyTitle": "No operator action needed right now",
+      "healthyDescription": "Recent routed calls are directly selecting every ready alias in the saved pool.",
+      "manualTitle": "Ordered routing is active",
+      "manualDescription": "This agent is not rotating every request. Repeated use of the primary alias is expected until round robin is enabled."
+    },
+    "howItWorksTitle": "How this pool works",
+    "howItWorks": {
+      "primary": "The agent Provider field stays pinned to the primary alias.",
+      "roundRobin": "Round Robin rotates across all ready aliases in the active pool.",
+      "failover": "Retryable upstream failures can fall through to the next eligible alias in the same request."
+    },
+    "quota": {
+      "checking": "Checking quota",
+      "checkingDescription": "GoClaw is still fetching the latest quota state for this alias.",
+      "healthySummary": "{{usable}} of {{total}} quota-ready",
+      "needsAttention": "{{count}} aliases need quota attention",
+      "blockersNow": "Blocking right now",
+      "floorFiveHour": "5h floor {{value}}%",
+      "floorWeekly": "Wk floor {{value}}%",
+      "plan": "Plan",
+      "lastChecked": "Checked {{value}}",
+      "readyLabel": "Quota ready",
+      "readyDescription": "This alias currently shows usable quota windows.",
+      "readinessTitle": "Quota Readiness",
+      "readinessDescription": "Look here first. Only signed-in aliases with usable quota should be trusted for live traffic.",
+      "requiresReadyAlias": "This alias must be signed in before GoClaw can verify quota.",
+      "failure": {
+        "billing": {
+          "label": "Billing",
+          "description": "Workspace billing or entitlement is blocking this account right now."
+        },
+        "exhausted": {
+          "label": "Exhausted",
+          "description": "This account is signed in, but one of its core quota windows is exhausted."
+        },
+        "reauth": {
+          "label": "Reauth",
+          "description": "Sign in again to refresh workspace access."
+        },
+        "forbidden": {
+          "label": "Forbidden",
+          "description": "This account cannot read upstream quota data."
+        },
+        "needs_setup": {
+          "label": "Needs setup",
+          "description": "Sign in again so GoClaw can restore the ChatGPT account workspace metadata."
+        },
+        "retry_later": {
+          "label": "Retry later",
+          "description": "The quota endpoint is temporarily unavailable or rate limited."
+        },
+        "unavailable": {
+          "label": "Unavailable",
+          "description": "Quota data is unavailable for this account right now."
+        }
+      }
+    },
+    "metrics": {
+      "poolHealth": "Pool Health",
+      "policy": "Traffic Policy",
+      "poolSize": "Pool Size",
+      "observedSample": "Observed Sample",
+      "routerActiveAccounts": "Router Active",
+      "blockedAccounts": "Blocked",
+      "readyAccounts": "Signed-In Accounts",
+      "quotaReadyAccounts": "Quota Ready",
+      "observedRotation": "Used Directly",
+      "healthy": "Healthy",
+      "needsAttention": "Needs attention",
+      "readyOfTotal": "{{ready}} of {{total}} aliases ready",
+      "failovers": "Failovers",
+      "noFailovers": "No failovers yet"
+    },
+    "verdict": {
+      "healthy": {
+        "title": "Round robin looks healthy",
+        "description": "{{observed}} ready accounts were observed rotating across {{count}} traced spans."
+      },
+      "warning": {
+        "title": "Round robin is configured but not verified yet",
+        "description": "Only {{observed}} ready accounts have direct routing evidence across {{count}} traced spans so far."
+      },
+      "manual": {
+        "title": "Ordered routing is active",
+        "description": "This agent is not rotating every request. Repeated use of the primary alias is expected until round robin is enabled."
+      }
+    },
+    "role": {
+      "preferred": "Primary",
+      "extra": "Extra"
+    },
+    "status": {
+      "ready": "Ready",
+      "needs_sign_in": "Needs sign-in",
+      "disabled": "Disabled"
+    },
+    "strategy": {
+      "manual": "Primary First",
+      "primaryFirst": "Primary First",
+      "roundRobin": "Round Robin",
+      "priorityOrder": "Priority Order"
+    }
+  },
   "identity": {
     "title": "Identity",
     "agentKey": "Agent Key",
@@ -286,8 +533,7 @@
     "retrying": "Retrying...",
     "done": "done",
     "fileLabelSOUL": "Soul & Personality",
-    "fileLabelIDENTITY": "Identity Card",
-    "fileLabelUSER_PREDEFINED": "Default User Context"
+    "fileLabelIDENTITY": "Identity Card"
   },
   "configGroups": {
     "core": "Core",

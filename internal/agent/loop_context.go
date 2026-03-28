@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -97,35 +96,25 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		ctx = tools.WithTeamTaskID(ctx, req.TeamTaskID)
 	}
 
-	// --- Workspace resolution (layered pipeline) ---
+	// --- Per-user setup: file seeding + workspace resolution ---
+	// Uses userSetups sync.Map to track both concerns atomically per user.
+	// Seeding must run before buildMessages→resolveContextFiles reads context files.
+	// Team sessions skip seeding: members process tasks from leader, not end-user onboarding.
+	isTeamSession := bootstrap.IsTeamSession(req.SessionKey)
+	setup := l.getOrCreateUserSetup(ctx, req.UserID, req.Channel, isTeamSession)
+
+	// Workspace resolution (layered pipeline).
 	// Layer order: tenant → team → project (future) → user/chat
 	// Two entry modes: solo agent (base = l.workspace) or team context (base = l.dataDir).
 	// Result is always a single folder set via WithToolWorkspace.
-
-	// Solo agent workspace: resolve base from user profile or agent config.
-	isTeamSession := bootstrap.IsTeamSession(req.SessionKey)
 	if l.workspace != "" && req.UserID != "" {
-		cachedWs, loaded := l.userWorkspaces.Load(req.UserID)
-		if !loaded {
-			ws := l.workspace
-			if l.ensureUserFiles != nil && !isTeamSession {
-				var err error
-				ws, err = l.ensureUserFiles(ctx, l.agentUUID, req.UserID, l.agentType, l.workspace, req.Channel)
-				if err != nil {
-					slog.Warn("failed to ensure user context files", "error", err)
-					ws = l.workspace
-				}
-			}
-			ws = config.ExpandHome(ws)
-			if !filepath.IsAbs(ws) {
-				ws, _ = filepath.Abs(ws)
-			}
-			l.userWorkspaces.Store(req.UserID, ws)
-			cachedWs = ws
+		ws := setup.workspace
+		if ws == "" {
+			ws = l.workspace
 		}
 		// Apply user isolation layer via pipeline.
 		shared := l.shouldShareWorkspace(req.UserID, req.PeerKind)
-		effectiveWorkspace := tools.ResolveWorkspace(cachedWs.(string),
+		effectiveWorkspace := tools.ResolveWorkspace(ws,
 			tools.UserChatLayer(tools.SanitizePathSegment(req.UserID), shared),
 		)
 		if l.shouldShareMemory() {
@@ -152,6 +141,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	}
 	if req.TeamID != "" {
 		ctx = tools.WithToolTeamID(ctx, req.TeamID)
+	}
+	if req.LeaderAgentID != "" {
+		ctx = tools.WithLeaderAgentID(ctx, req.LeaderAgentID)
 	}
 
 	// Team workspace: auto-resolve for agents with team membership (not dispatched).
@@ -267,6 +259,7 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		WorkspaceChannel:    req.WorkspaceChannel,
 		WorkspaceChatID:     req.WorkspaceChatID,
 		TeamTaskID:          req.TeamTaskID,
+		LeaderAgentID:       tools.LeaderAgentIDFromCtx(ctx),
 		AgentToolKey:        l.id,
 	}
 	ctx = store.WithRunContext(ctx, rc)

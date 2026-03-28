@@ -96,11 +96,62 @@ A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced secu
 | Skill system               | ✅ Embeddings/semantic               | ✅ SKILL.md + TOML                           | ✅ Basic                              | ✅ BM25 + pgvector hybrid      |
 | Lane-based scheduler       | ✅                                   | Bounded concurrency                          | —                                     | ✅ (main/subagent/team/cron)   |
 | Messaging channels         | 37+                                  | 15+                                          | 10+                                   | 7+                             |
-| Companion apps             | macOS, iOS, Android                  | Python SDK                                   | —                                     | Web dashboard                  |
+| Companion apps             | macOS, iOS, Android                  | Python SDK                                   | —                                     | Web dashboard + **Desktop app** |
 | Live Canvas / Voice        | ✅ (A2UI + TTS/STT)                  | —                                            | Voice transcription                   | TTS (4 providers)              |
 | LLM providers              | 10+                                  | 8 native + 29 compat                         | 13+                                   | **20+**                        |
 | Per-user workspaces        | ✅ (file-based)                      | —                                            | —                                     | ✅ (PostgreSQL)                |
 | Encrypted secrets          | — (env vars only)                    | ✅ ChaCha20-Poly1305                         | — (plaintext JSON)                    | ✅ AES-256-GCM in DB           |
+
+## Desktop Edition (GoClaw Lite)
+
+A native desktop app for local AI agents — no Docker, no PostgreSQL, no infrastructure.
+
+**macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/nextlevelbuilder/goclaw/main/scripts/install-lite.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/nextlevelbuilder/goclaw/main/scripts/install-lite.ps1 | iex
+```
+
+### What's Included
+- Single native app (Wails v2 + React), ~30 MB
+- SQLite database (zero setup)
+- Chat with agents (streaming, tools, media, file attachments)
+- Agent management (max 5), provider config, MCP servers, skills, cron
+- Team tasks with Kanban board and real-time updates
+- Auto-update from GitHub Releases
+
+### Lite vs Standard
+
+| Feature | Lite (Desktop) | Standard (Server) |
+|---------|---------------|-------------------|
+| Agents | Max 5 | Unlimited |
+| Teams | Max 1 (5 members) | Unlimited |
+| Database | SQLite (local) | PostgreSQL |
+| Memory | FTS5 text search | pgvector semantic |
+| Channels | — | Telegram, Discord, Slack, Zalo, Feishu, WhatsApp |
+| Knowledge Graph | — | Full |
+| RBAC / Multi-tenant | — | Full |
+| Auto-update | GitHub Releases | Docker / binary |
+
+### Building from Source
+```bash
+# Prerequisites: Go 1.26+, pnpm, Wails CLI (go install github.com/wailsapp/wails/v2/cmd/wails@latest)
+make desktop-build                    # Build .app (macOS) or .exe (Windows)
+make desktop-dmg VERSION=0.1.0        # Create .dmg installer (macOS only)
+make desktop-dev                      # Dev mode with hot reload
+```
+
+### Desktop Releases
+Desktop uses independent versioning with `lite-v*` tags:
+```bash
+git tag lite-v0.1.0 && git push origin lite-v0.1.0
+# → GitHub Actions builds macOS (.dmg + .tar.gz) + Windows (.zip)
+# → Creates GitHub Release with all assets
+```
 
 ## Architecture
 
