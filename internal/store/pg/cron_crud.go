@@ -185,25 +185,35 @@ func (s *PGCronStore) EnableJob(ctx context.Context, jobID string, enabled bool)
 		return fmt.Errorf("invalid job ID: %s", jobID)
 	}
 
-	q := "UPDATE cron_jobs SET enabled = $1, updated_at = $2 WHERE id = $3"
-	args := []any{enabled, time.Now(), id}
-
-	if !store.IsCrossTenant(ctx) {
-		tid := store.TenantIDFromContext(ctx)
-		if tid == uuid.Nil {
-			return fmt.Errorf("tenant_id required")
-		}
-		q += fmt.Sprintf(" AND tenant_id = $%d", len(args)+1)
-		args = append(args, tid)
-	}
-
-	res, err := s.db.ExecContext(ctx, q, args...)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("job not found")
+	defer tx.Rollback()
+
+	current, err := s.lockCronJobForMutation(ctx, tx, id, false)
+	if err != nil {
+		return err
 	}
-	s.cacheLoaded = false
+
+	now := time.Now()
+	nextRun, err := store.NextRunForToggle(&current.Schedule, enabled, current.Enabled, current.NextRunAt, now, s.defaultTZ)
+	if err != nil {
+		return err
+	}
+
+	if err := execCronJobUpdateTx(ctx, tx, id, map[string]any{
+		"enabled":     enabled,
+		"next_run_at": nextRun,
+		"updated_at":  now,
+	}); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	s.InvalidateCache()
 	return nil
 }
