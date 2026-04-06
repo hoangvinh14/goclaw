@@ -14,7 +14,7 @@ import type { TeamTaskData } from '../../types/team'
 
 export function ChatCanvas() {
   const { t } = useTranslation('common')
-  const { messages, isRunning, activity, sendMessage } = useChat()
+  const { messages, isRunning, activity, sendMessage, abort } = useChat()
   const { selectedAgent } = useAgents()
   const { members, fetchTaskDetail } = useTeamTasks()
   const activeSessionKey = useSessionStore((s) => s.activeSessionKey)
@@ -49,6 +49,10 @@ export function ChatCanvas() {
     userScrolledUp.current = false
     sendMessage(text, selectedAgent.id, files)
   }, [selectedAgent, sendMessage])
+
+  const handleStop = useCallback(() => {
+    abort()
+  }, [abort])
 
   const hasMessages = messages.length > 0
 
@@ -95,6 +99,7 @@ export function ChatCanvas() {
         {/* Input bar */}
         <InputBar
           onSend={handleSend}
+          onStop={handleStop}
           disabled={!selectedAgent}
           isRunning={isRunning}
           placeholder={selectedAgent ? t('sendMessage') : t('selectAgent')}

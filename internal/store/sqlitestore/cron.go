@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adhocore/gronx"
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
@@ -24,6 +23,7 @@ const defaultCronCacheTTL = 2 * time.Minute
 type SQLiteCronStore struct {
 	db        *sql.DB
 	mu        sync.Mutex
+	writeMu   sync.Mutex
 	baseCtx   context.Context
 	cancelCtx context.CancelFunc
 	onJob     func(job *store.CronJob) (*store.CronJobResult, error)
@@ -51,6 +51,12 @@ func (s *SQLiteCronStore) SetRetryConfig(cfg cron.RetryConfig) {
 }
 
 func (s *SQLiteCronStore) SetDefaultTimezone(tz string) {
+	if tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			slog.Warn("security.invalid_default_timezone", "tz", tz, "err", err)
+			return
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultTZ = tz
@@ -118,15 +124,18 @@ func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
 	var userID *string
 	var name, scheduleKind string
 	var enabled, deleteAfterRun bool
+	var stateless, deliver, wakeHeartbeat bool
+	var deliverChannel, deliverTo string
 	var cronExpr, tz, lastStatus, lastError *string
-	var runAt, nextRunAt, lastRunAt *time.Time
+	var runAt, nextRunAt, lastRunAt nullSqliteTime
 	var intervalMS *int64
 	var payloadJSON []byte
-	var createdAt, updatedAt time.Time
+	createdAt, updatedAt := scanTimePair()
 
 	err := row.Scan(&id, &tenantID, &agentID, &userID, &name, &enabled, &scheduleKind, &cronExpr, &runAt, &tz,
-		&intervalMS, &payloadJSON, &deleteAfterRun, &nextRunAt, &lastRunAt, &lastStatus, &lastError,
-		&createdAt, &updatedAt)
+		&intervalMS, &payloadJSON, &deleteAfterRun, &stateless, &deliver, &deliverChannel, &deliverTo, &wakeHeartbeat,
+		&nextRunAt, &lastRunAt, &lastStatus, &lastError,
+		createdAt, updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +154,14 @@ func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
 		Enabled:        enabled,
 		Schedule:       store.CronSchedule{Kind: scheduleKind},
 		Payload:        payload,
-		CreatedAtMS:    createdAt.UnixMilli(),
-		UpdatedAtMS:    updatedAt.UnixMilli(),
+		CreatedAtMS:    createdAt.Time.UnixMilli(),
+		UpdatedAtMS:    updatedAt.Time.UnixMilli(),
 		DeleteAfterRun: deleteAfterRun,
+		Stateless:      stateless,
+		Deliver:        deliver,
+		DeliverChannel: deliverChannel,
+		DeliverTo:      deliverTo,
+		WakeHeartbeat:  wakeHeartbeat,
 	}
 
 	if agentID != nil {
@@ -159,8 +173,8 @@ func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
 	if cronExpr != nil {
 		job.Schedule.Expr = *cronExpr
 	}
-	if runAt != nil {
-		ms := runAt.UnixMilli()
+	if runAt.Valid {
+		ms := runAt.Time.UnixMilli()
 		job.Schedule.AtMS = &ms
 	}
 	if intervalMS != nil {
@@ -169,12 +183,12 @@ func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
 	if tz != nil {
 		job.Schedule.TZ = *tz
 	}
-	if nextRunAt != nil {
-		ms := nextRunAt.UnixMilli()
+	if nextRunAt.Valid {
+		ms := nextRunAt.Time.UnixMilli()
 		job.State.NextRunAtMS = &ms
 	}
-	if lastRunAt != nil {
-		ms := lastRunAt.UnixMilli()
+	if lastRunAt.Valid {
+		ms := lastRunAt.Time.UnixMilli()
 		job.State.LastRunAtMS = &ms
 	}
 	if lastStatus != nil {
@@ -189,49 +203,13 @@ func scanCronRow(row cronRowScanner) (*store.CronJob, error) {
 
 // computeNextRun calculates the next run time for a schedule.
 func computeNextRun(schedule *store.CronSchedule, now time.Time, defaultTZ string) *time.Time {
-	switch schedule.Kind {
-	case "at":
-		if schedule.AtMS != nil {
-			t := time.UnixMilli(*schedule.AtMS)
-			if t.After(now) {
-				return &t
-			}
-		}
-		return nil
-	case "every":
-		if schedule.EveryMS != nil && *schedule.EveryMS > 0 {
-			t := now.Add(time.Duration(*schedule.EveryMS) * time.Millisecond)
-			return &t
-		}
-		return nil
-	case "cron":
-		if schedule.Expr == "" {
-			return nil
-		}
-		tz := schedule.TZ
-		if tz == "" {
-			tz = defaultTZ
-		}
-		evalTime := now
-		if tz != "" {
-			if loc, err := time.LoadLocation(tz); err == nil {
-				evalTime = now.In(loc)
-			}
-		}
-		nextTime, err := gronx.NextTickAfter(schedule.Expr, evalTime, false)
-		if err != nil {
-			return nil
-		}
-		utcNext := nextTime.UTC()
-		return &utcNext
-	default:
-		return nil
-	}
+	return store.ComputeNextRun(schedule, now, defaultTZ)
 }
 
 func (s *SQLiteCronStore) scanJob(ctx context.Context, id uuid.UUID) (*store.CronJob, error) {
 	q := `SELECT id, tenant_id, agent_id, user_id, name, enabled, schedule_kind, cron_expression, run_at, timezone,
-		 interval_ms, payload, delete_after_run, next_run_at, last_run_at, last_status, last_error,
+		 interval_ms, payload, delete_after_run, stateless, deliver, deliver_channel, deliver_to, wake_heartbeat,
+		 next_run_at, last_run_at, last_status, last_error,
 		 created_at, updated_at FROM cron_jobs WHERE id = ?`
 	args := []any{id}
 

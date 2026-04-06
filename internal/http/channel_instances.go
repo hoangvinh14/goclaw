@@ -11,6 +11,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
@@ -32,35 +33,45 @@ func NewChannelInstancesHandler(s store.ChannelInstanceStore, agentStore store.A
 
 // RegisterRoutes registers all channel instance routes on the given mux.
 func (h *ChannelInstancesHandler) RegisterRoutes(mux *http.ServeMux) {
+	// Channel instance CRUD (reads: viewer+, writes: admin+)
 	mux.HandleFunc("GET /v1/channels/instances", h.auth(h.handleList))
-	mux.HandleFunc("POST /v1/channels/instances", h.auth(h.handleCreate))
+	mux.HandleFunc("POST /v1/channels/instances", h.adminAuth(h.handleCreate))
 	mux.HandleFunc("GET /v1/channels/instances/{id}", h.auth(h.handleGet))
-	mux.HandleFunc("PUT /v1/channels/instances/{id}", h.auth(h.handleUpdate))
-	mux.HandleFunc("DELETE /v1/channels/instances/{id}", h.auth(h.handleDelete))
+	mux.HandleFunc("PUT /v1/channels/instances/{id}", h.adminAuth(h.handleUpdate))
+	mux.HandleFunc("DELETE /v1/channels/instances/{id}", h.adminAuth(h.handleDelete))
 
 	// Channel contacts (global, not per-agent)
 	if h.contactStore != nil {
 		mux.HandleFunc("GET /v1/contacts", h.auth(h.handleListContacts))
 		mux.HandleFunc("GET /v1/contacts/resolve", h.auth(h.handleResolveContacts))
-		mux.HandleFunc("POST /v1/contacts/merge", h.auth(h.handleMergeContacts))
-		mux.HandleFunc("POST /v1/contacts/unmerge", h.auth(h.handleUnmergeContacts))
+		mux.HandleFunc("POST /v1/contacts/merge", h.adminAuth(h.handleMergeContacts))
+		mux.HandleFunc("POST /v1/contacts/unmerge", h.adminAuth(h.handleUnmergeContacts))
 		mux.HandleFunc("GET /v1/contacts/merged/{tenantUserId}", h.auth(h.handleListMergedContacts))
 	}
 	if h.tenantStore != nil {
 		mux.HandleFunc("GET /v1/tenant-users", h.auth(h.handleListTenantUsers))
 	}
 
+	// Unified user search (contacts + tenant_users)
+	if h.contactStore != nil {
+		mux.HandleFunc("GET /v1/users/search", h.auth(h.handleSearchUsers))
+	}
+
 	// Group file writers (nested under channel instances)
 	if h.configPermStore != nil {
 		mux.HandleFunc("GET /v1/channels/instances/{id}/writers/groups", h.auth(h.handleWriterGroups))
 		mux.HandleFunc("GET /v1/channels/instances/{id}/writers", h.auth(h.handleListWriters))
-		mux.HandleFunc("POST /v1/channels/instances/{id}/writers", h.auth(h.handleAddWriter))
-		mux.HandleFunc("DELETE /v1/channels/instances/{id}/writers/{userId}", h.auth(h.handleRemoveWriter))
+		mux.HandleFunc("POST /v1/channels/instances/{id}/writers", h.adminAuth(h.handleAddWriter))
+		mux.HandleFunc("DELETE /v1/channels/instances/{id}/writers/{userId}", h.adminAuth(h.handleRemoveWriter))
 	}
 }
 
 func (h *ChannelInstancesHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth("", next)
+}
+
+func (h *ChannelInstancesHandler) adminAuth(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(permissions.RoleAdmin, next)
 }
 
 func (h *ChannelInstancesHandler) emitCacheInvalidate() {
@@ -310,7 +321,7 @@ func (h *ChannelInstancesHandler) handleWriterGroups(w http.ResponseWriter, r *h
 	if !ok {
 		return
 	}
-	perms, err := h.configPermStore.List(r.Context(), agentID, "file_writer", "")
+	perms, err := h.configPermStore.List(r.Context(), agentID, store.ConfigTypeFileWriter, "")
 	if err != nil {
 		slog.Error("channel_instances.writer_groups", "error", err)
 		locale := store.LocaleFromContext(r.Context())
@@ -346,7 +357,7 @@ func (h *ChannelInstancesHandler) handleListWriters(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadRequest, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRequired, "group_id"))
 		return
 	}
-	perms, err := h.configPermStore.List(r.Context(), agentID, "file_writer", groupID)
+	perms, err := h.configPermStore.List(r.Context(), agentID, store.ConfigTypeFileWriter, groupID)
 	if err != nil {
 		slog.Error("channel_instances.list_writers", "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToList, "writers"))
@@ -404,7 +415,7 @@ func (h *ChannelInstancesHandler) handleAddWriter(w http.ResponseWriter, r *http
 	if err := h.configPermStore.Grant(r.Context(), &store.ConfigPermission{
 		AgentID:    agentID,
 		Scope:      body.GroupID,
-		ConfigType: "file_writer",
+		ConfigType: store.ConfigTypeFileWriter,
 		UserID:     body.UserID,
 		Permission: "allow",
 		Metadata:   meta,
@@ -429,7 +440,7 @@ func (h *ChannelInstancesHandler) handleRemoveWriter(w http.ResponseWriter, r *h
 		return
 	}
 	// Prevent removing the last writer (same guard as Telegram /removewriter)
-	writers, _ := h.configPermStore.List(r.Context(), agentID, "file_writer", groupID)
+	writers, _ := h.configPermStore.List(r.Context(), agentID, store.ConfigTypeFileWriter, groupID)
 	allowCount := 0
 	for _, p := range writers {
 		if p.Permission == "allow" {
@@ -440,7 +451,7 @@ func (h *ChannelInstancesHandler) handleRemoveWriter(w http.ResponseWriter, r *h
 		writeError(w, http.StatusConflict, protocol.ErrFailedPrecondition, i18n.T(locale, i18n.MsgCannotRemoveLastWriter))
 		return
 	}
-	if err := h.configPermStore.Revoke(r.Context(), agentID, groupID, "file_writer", userID); err != nil {
+	if err := h.configPermStore.Revoke(r.Context(), agentID, groupID, store.ConfigTypeFileWriter, userID); err != nil {
 		slog.Error("channel_instances.remove_writer", "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToDelete, "writer", "internal error"))
 		return
@@ -464,6 +475,9 @@ func (h *ChannelInstancesHandler) handleListContacts(w http.ResponseWriter, r *h
 	}
 	if v := r.URL.Query().Get("peer_kind"); v != "" {
 		opts.PeerKind = v
+	}
+	if v := r.URL.Query().Get("contact_type"); v != "" {
+		opts.ContactType = v
 	}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {

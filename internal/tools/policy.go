@@ -100,7 +100,7 @@ func NewPolicyEngine(cfg *config.ToolsConfig) *PolicyEngine {
 // FilterTools returns only the tools allowed by the policy for the given context.
 // It evaluates the 7-step pipeline and returns filtered provider definitions.
 func (pe *PolicyEngine) FilterTools(
-	registry *Registry,
+	registry ToolExecutor,
 	agentID string,
 	providerName string,
 	agentToolPolicy *config.ToolPolicySpec,
@@ -130,8 +130,16 @@ func (pe *PolicyEngine) FilterTools(
 		}
 	}
 
-	// Add registry aliases for allowed canonical tools
-	for alias, canonical := range registry.Aliases() {
+	// Add registry aliases for allowed canonical tools.
+	// Sort alias names for deterministic ordering (prompt caching).
+	aliasMap := registry.Aliases()
+	aliasList := make([]string, 0, len(aliasMap))
+	for alias := range aliasMap {
+		aliasList = append(aliasList, alias)
+	}
+	slices.Sort(aliasList)
+	for _, alias := range aliasList {
+		canonical := aliasMap[alias]
 		if !allowedSet[canonical] {
 			continue
 		}

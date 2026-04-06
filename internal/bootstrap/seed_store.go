@@ -15,7 +15,7 @@ import (
 // retryOnBusy retries fn up to 3 times on SQLITE_BUSY errors with 500ms delay.
 func retryOnBusy(fn func() error) error {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		lastErr = fn()
 		if lastErr == nil {
 			return nil

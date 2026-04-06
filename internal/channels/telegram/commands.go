@@ -85,8 +85,11 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			"/stopall — Stop all running tasks\n" +
 			"/reset — Reset conversation history\n" +
 			"/status — Show bot status\n" +
+			"/reactions — Show reaction emoji legend\n" +
 			"/tasks — List team tasks\n" +
 			"/task_detail <id> — View task detail\n" +
+			"/subagents — List subagent tasks\n" +
+			"/subagent <id> — View subagent task detail\n" +
 			"/writers — List file writers for this group\n" +
 			"/addwriter — Add a file writer (reply to their message)\n" +
 			"/removewriter — Remove a file writer (reply to their message)\n" +
@@ -103,7 +106,7 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			if err == nil {
 				groupID := fmt.Sprintf("group:%s:%s", c.Name(), chatIDStr)
 				senderNumericID := strings.SplitN(senderID, "|", 2)[0]
-				isWriter, err := c.configPermStore.CheckPermission(ctx, agentID, groupID, "file_writer", senderNumericID)
+				isWriter, err := c.configPermStore.CheckPermission(ctx, agentID, groupID, store.ConfigTypeFileWriter, senderNumericID)
 				if err != nil {
 					slog.Warn("security.reset_writer_check_failed", "error", err, "sender", senderNumericID)
 					// fail-open: allow reset if DB check fails
@@ -129,6 +132,7 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			PeerKind: peerKind,
 			AgentID:  c.AgentID(),
 			UserID:   strings.SplitN(senderID, "|", 2)[0],
+			TenantID: c.TenantID(),
 			Metadata: map[string]string{
 				"command":           "reset",
 				"local_key":         localKey,
@@ -154,6 +158,7 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			PeerKind: peerKind,
 			AgentID:  c.AgentID(),
 			UserID:   strings.SplitN(senderID, "|", 2)[0],
+			TenantID: c.TenantID(),
 			Metadata: map[string]string{
 				"command":           "stop",
 				"local_key":         localKey,
@@ -177,6 +182,7 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			PeerKind: peerKind,
 			AgentID:  c.AgentID(),
 			UserID:   strings.SplitN(senderID, "|", 2)[0],
+			TenantID: c.TenantID(),
 			Metadata: map[string]string{
 				"command":           "stopall",
 				"local_key":         localKey,
@@ -202,6 +208,14 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 		c.handleTaskDetail(ctx, chatID, text, isGroup, setThread)
 		return true
 
+	case "/subagents":
+		c.handleSubagentsList(ctx, chatID, isGroup, setThread)
+		return true
+
+	case "/subagent":
+		c.handleSubagentDetail(ctx, chatID, text, isGroup, setThread)
+		return true
+
 	case "/addwriter":
 		c.handleWriterCommand(ctx, message, chatID, chatIDStr, senderID, isGroup, setThread, "add")
 		return true
@@ -212,6 +226,18 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 
 	case "/writers":
 		c.handleListWriters(ctx, chatID, chatIDStr, isGroup, setThread)
+		return true
+
+	case "/reactions":
+		var lines string
+		for _, r := range reactionLegend {
+			lines += fmt.Sprintf("%s  %s\n", r.Emoji, r.Desc)
+		}
+		reactText := fmt.Sprintf("<b>Reaction Emoji Legend</b>\n\n<pre>%s</pre>\nReaction level: <b>%s</b>", lines, c.config.ReactionLevel)
+		msg := tu.Message(chatIDObj, reactText)
+		msg.ParseMode = telego.ModeHTML
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
 		return true
 	}
 

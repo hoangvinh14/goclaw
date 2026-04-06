@@ -35,11 +35,6 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [heartbeatOpen, setHeartbeatOpen] = useState(false);
 
-  const handleRegenerate = async (prompt: string) => {
-    await regenerateAgent(prompt);
-    setSummoningOpen(true);
-  };
-
   const handleResummon = async () => {
     await resummonAgent();
     setSummoningOpen(true);
@@ -95,8 +90,9 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
                 files={files}
                 onGetFile={getFile}
                 onSetFile={setFile}
-                onRegenerate={handleRegenerate}
+                onRegenerate={regenerateAgent}
                 onResummon={handleResummon}
+                onRegenerateCompleted={refresh}
               />
             </TabsContent>
 

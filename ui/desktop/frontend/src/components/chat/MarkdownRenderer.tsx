@@ -49,10 +49,10 @@ function resolveFileUrl(path: string, baseUrl?: string): string {
 
 export function MarkdownRenderer({ content, baseUrl }: MarkdownRendererProps) {
   return (
+    <div className="text-sm leading-relaxed text-text-primary break-words overflow-hidden">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[rehypeSanitize]}
-      className="text-sm leading-relaxed text-text-primary break-words overflow-hidden"
       children={content}
       components={{
         code({ className, children, ...props }) {
@@ -132,5 +132,6 @@ export function MarkdownRenderer({ content, baseUrl }: MarkdownRendererProps) {
         hr: () => <hr className="border-border my-4" />,
       }}
     />
+    </div>
   )
 }

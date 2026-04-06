@@ -279,6 +279,7 @@ export const AgentEventTypes = {
   RUN_STARTED: "run.started",
   RUN_COMPLETED: "run.completed",
   RUN_FAILED: "run.failed",
+  RUN_CANCELLED: "run.cancelled",
   TOOL_CALL: "tool.call",
   TOOL_RESULT: "tool.result",
   BLOCK_REPLY: "block.reply",

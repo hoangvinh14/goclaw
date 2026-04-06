@@ -39,7 +39,7 @@ func (l *Loop) processToolResult(
 	// Record for loop detection.
 	argsHash := rs.loopDetector.record(registryName, tc.Arguments)
 	rs.loopDetector.recordResult(argsHash, result.ForLLM)
-	rs.loopDetector.recordMutation(registryName)
+	rs.loopDetector.recordMutation(registryName, tc.Arguments)
 
 	if result.Async {
 		rs.asyncToolCalls = append(rs.asyncToolCalls, tc.Name)
@@ -120,6 +120,7 @@ func (l *Loop) processToolResult(
 		if level == "critical" {
 			slog.Warn("tool loop critical", "agent", l.id, "tool", registryName, "message", msg)
 			rs.finalContent = "I was unable to complete this task — I got stuck repeatedly calling " + registryName + " without making progress. Please try rephrasing your request."
+			rs.loopKilled = true
 			return toolMsg, nil, toolResultBreak
 		}
 		slog.Warn("tool loop warning", "agent", l.id, "tool", registryName, "message", msg)
@@ -134,6 +135,7 @@ func (l *Loop) processToolResult(
 				slog.Warn("tool loop critical: same result",
 					"tool", registryName, "agent", l.id, "run", req.RunID)
 				rs.finalContent = msg
+				rs.loopKilled = true
 				return toolMsg, nil, toolResultBreak
 			}
 			warningMsgs = append(warningMsgs, providers.Message{Role: "user", Content: msg})
@@ -153,8 +155,11 @@ func (l *Loop) checkReadOnlyStreak(rs *runState, req *RunRequest) (warningMsg *p
 	}
 	if level == "critical" {
 		slog.Warn("tool loop critical: read-only streak",
-			"streak", rs.loopDetector.readOnlyStreak, "agent", l.id, "run", req.RunID)
+			"streak", rs.loopDetector.readOnlyStreak,
+			"unique", rs.loopDetector.readOnlyUnique,
+			"agent", l.id, "run", req.RunID)
 		rs.finalContent = msg
+		rs.loopKilled = true
 		return nil, true
 	}
 	slog.Warn("tool loop warning: read-only streak",

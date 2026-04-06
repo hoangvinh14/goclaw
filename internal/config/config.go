@@ -133,8 +133,7 @@ type AgentDefaults struct {
 // Matching TS agents.defaults.compaction.
 type CompactionConfig struct {
 	ReserveTokensFloor int                `json:"reserveTokensFloor,omitempty"` // min reserve tokens (default 20000)
-	MaxHistoryShare    float64            `json:"maxHistoryShare,omitempty"`    // max share of context for history (default 0.75)
-	MinMessages        int                `json:"minMessages,omitempty"`        // min messages before compaction triggers (default 200)
+	MaxHistoryShare    float64            `json:"maxHistoryShare,omitempty"`    // max share of context for history (default 0.85)
 	KeepLastMessages   int                `json:"keepLastMessages,omitempty"`   // messages to keep after compaction (default 4)
 	MemoryFlush        *MemoryFlushConfig `json:"memoryFlush,omitempty"`        // pre-compaction flush
 }
@@ -351,6 +350,7 @@ type SubagentsConfig struct {
 	MaxSpawnDepth       int    `json:"maxSpawnDepth,omitempty"`       // default 1, range 1-5
 	MaxChildrenPerAgent int    `json:"maxChildrenPerAgent,omitempty"` // default 5, range 1-20
 	ArchiveAfterMinutes int    `json:"archiveAfterMinutes,omitempty"` // default 60
+	MaxRetries          int    `json:"maxRetries,omitempty"`          // max LLM retries on error (default 2)
 	Model               string `json:"model,omitempty"`               // model override for subagents
 }
 

@@ -66,12 +66,19 @@ func (l *Loop) filteredToolNamesForChannel(channelType string) []string {
 }
 
 // buildCredentialCLIContext generates the TOOLS.md supplement for credentialed CLIs.
-// Returns empty string if no secure CLI store is configured or no enabled CLIs.
+// Uses agent-scoped list when agent UUID is available: returns only global CLIs
+// plus explicitly granted CLIs, with grant overrides merged.
 func (l *Loop) buildCredentialCLIContext(ctx context.Context) string {
 	if l.secureCLIStore == nil {
 		return ""
 	}
-	creds, err := l.secureCLIStore.ListEnabled(ctx)
+	var creds []store.SecureCLIBinary
+	var err error
+	if l.agentUUID != uuid.Nil {
+		creds, err = l.secureCLIStore.ListForAgent(ctx, l.agentUUID)
+	} else {
+		creds, err = l.secureCLIStore.ListEnabled(ctx)
+	}
 	if err != nil || len(creds) == 0 {
 		return ""
 	}
@@ -202,10 +209,24 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		}
 		toolNames = filtered
 	}
-	var mcpToolDescs map[string]string
-	if !hasMCPToolSearch {
-		mcpToolDescs = l.buildMCPToolDescs(toolNames)
+	// Exclude tool aliases from the system prompt tool list.
+	// Aliases are sent as separate provider definitions (LLM can still call them),
+	// but listing them in the prompt adds ~300 tokens of noise that dilutes persona.
+	if l.tools != nil {
+		aliasSet := l.tools.Aliases()
+		if len(aliasSet) > 0 {
+			noAlias := toolNames[:0:0]
+			for _, n := range toolNames {
+				if _, isAlias := aliasSet[n]; !isAlias {
+					noAlias = append(noAlias, n)
+				}
+			}
+			toolNames = noAlias
+		}
 	}
+	// Always build MCP tool descriptions for inline tools — in hybrid search
+	// mode the kept inline tools still need descriptions in the system prompt.
+	mcpToolDescs := l.buildMCPToolDescs(toolNames)
 
 	// Bootstrap DM mode: only restrict tools for open agents (identity being created).
 	// Predefined agents keep full capabilities — BOOTSTRAP.md guides behavior.
@@ -214,9 +235,30 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		mcpToolDescs = nil
 	}
 
+	// Determine whether to inject team context into the system prompt.
+	// Team context (TEAM.md, workspace section, members roster) is injected when:
+	//   - This is a team-dispatched session (team: prefix), OR
+	//   - Agent is the lead of a team AND this is an inbound (non-dispatch) session.
+	// Member-only agents in inbound chat get spawn section instead of team context.
+	isTeamDispatch := bootstrap.IsTeamSession(sessionKey)
+	injectTeamContext := isTeamDispatch || (hasTeamTools && l.isTeamLead)
+
+	// Filter TEAM.md from context files when team context should not be injected
+	// (i.e. member-only agent in inbound chat — spawn section applies instead).
+	if !injectTeamContext {
+		filtered := make([]bootstrap.ContextFile, 0, len(contextFiles))
+		for _, cf := range contextFiles {
+			if cf.Path != bootstrap.TeamFile {
+				filtered = append(filtered, cf)
+			}
+		}
+		contextFiles = filtered
+	}
+
 	// Resolve team members so agent knows who to assign tasks to.
+	// Only resolve when team context is active — avoids unnecessary DB query for member-only inbound chats.
 	var teamMembers []store.TeamMemberData
-	if hasTeamTools && l.teamStore != nil && l.agentUUID != uuid.Nil {
+	if injectTeamContext && hasTeamTools && l.teamStore != nil && l.agentUUID != uuid.Nil {
 		if team, _ := l.teamStore.GetTeamForAgent(ctx, l.agentUUID); team != nil {
 			teamMembers, _ = l.teamStore.ListMembers(ctx, team.ID)
 		}
@@ -236,7 +278,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		SkillsSummary:          l.resolveSkillsSummary(ctx, skillFilter),
 		HasMemory:              l.hasMemory,
 		HasSpawn:               l.tools != nil && hasSpawn,
-		HasTeam:                hasTeamTools,
+		IsTeamContext:          injectTeamContext,
 		TeamWorkspace:          tools.ToolTeamWorkspaceFromCtx(ctx),
 		TeamMembers:            teamMembers,
 		TeamGuidance:           teamGuidance(edition.Current().TeamFullMode),
@@ -253,6 +295,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		SandboxWorkspaceAccess: l.sandboxWorkspaceAccess,
 		ShellDenyGroups:        l.shellDenyGroups,
 		SelfEvolve:             l.selfEvolve,
+		ProviderType:           providerTypeOf(l.provider),
 		CredentialCLIContext:   l.buildCredentialCLIContext(ctx),
 		IsBootstrap:            hadBootstrap && l.agentType != store.AgentTypePredefined,
 	})
@@ -366,8 +409,8 @@ func filterBootstrapTools(toolNames []string) []string {
 // these limits, inline all skills as XML in the system prompt (like TS).
 // Above these limits, only include skill_search instructions.
 const (
-	skillInlineMaxCount  = 40   // max skills to inline
-	skillInlineMaxTokens = 5000 // max estimated tokens for skill descriptions
+	skillInlineMaxCount  = 60   // max skills to inline
+	skillInlineMaxTokens = 3000 // max estimated tokens for skill descriptions
 )
 
 // resolveSkillsSummary dynamically builds the skills summary for the system prompt.
@@ -391,10 +434,15 @@ func (l *Loop) resolveSkillsSummary(ctx context.Context, skillFilter []string) s
 		return ""
 	}
 
-	// Estimate tokens: ~1 token per 4 chars for name+description
+	// Estimate tokens: ~1 token per 4 chars for name+description.
+	// Cap description length to match BuildSummary() truncation (skillDescMaxLen=200 runes).
 	totalChars := 0
 	for _, s := range filtered {
-		totalChars += len(s.Name) + len(s.Description) + 10 // +10 for XML tags overhead
+		descLen := len(s.Description)
+		if descLen > 200 {
+			descLen = 200
+		}
+		totalChars += len(s.Name) + descLen + 10 // +10 for XML tags overhead
 	}
 	estimatedTokens := totalChars / 4
 
@@ -463,7 +511,8 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 		return nil, dropped
 	}
 
-	// 2. Walk through messages ensuring tool_result follows matching tool_use.
+	// 2. Walk through messages ensuring tool_result follows matching tool_use
+	// and that roles alternate correctly (user↔assistant).
 	// Also dedup tool call IDs across the transcript for legacy sessions that
 	// may have persisted duplicates before the live uniquify fix was deployed.
 	var result []providers.Message
@@ -483,17 +532,25 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 			// results with the same raw ID pair correctly in encounter order.
 			idQueue := make(map[string][]string, len(msg.ToolCalls)) // origID → []newID
 			expectedIDs := make(map[string]bool, len(msg.ToolCalls))
+			didDedup := false
 			for j := range msg.ToolCalls {
 				origID := msg.ToolCalls[j].ID
 				newID := origID
 				if globalSeen[origID] {
 					newID = fmt.Sprintf("%s_dedup_%d", origID, j)
 					slog.Debug("sanitizeHistory: dedup tool call ID", "orig", origID, "new", newID)
+					didDedup = true
+					dropped++ // count as change so cleaned history is persisted back to DB
 				}
 				msg.ToolCalls[j].ID = newID
 				globalSeen[newID] = true
 				idQueue[origID] = append(idQueue[origID], newID)
 				expectedIDs[newID] = true
+			}
+			// When dedup rewrites IDs, clear RawAssistantContent so the provider
+			// uses the corrected ToolCalls instead of raw JSON with stale IDs.
+			if didDedup {
+				msg.RawAssistantContent = nil
 			}
 
 			result = append(result, msg)
@@ -537,28 +594,55 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 		}
 	}
 
+	// 3. Fix role alternation: LLM APIs require user↔assistant alternation.
+	// Merge consecutive same-role messages (e.g. two user messages) into one,
+	// which can happen from bootstrap nudges, inject channel, or session corruption.
+	if len(result) > 1 {
+		merged := make([]providers.Message, 0, len(result))
+		merged = append(merged, result[0])
+		for j := 1; j < len(result); j++ {
+			prev := &merged[len(merged)-1]
+			curr := result[j]
+			// Only merge plain messages (no tool_calls, no tool role)
+			if curr.Role == prev.Role && curr.Role != "tool" && len(curr.ToolCalls) == 0 && len(prev.ToolCalls) == 0 {
+				slog.Debug("sanitizeHistory: merging consecutive same-role messages",
+					"role", curr.Role, "index", j)
+				prev.Content += "\n\n" + curr.Content
+				// Preserve media refs from merged message so compaction
+				// summary retains knowledge of shared media files.
+				if len(curr.MediaRefs) > 0 {
+					prev.MediaRefs = append(prev.MediaRefs, curr.MediaRefs...)
+				}
+				dropped++
+			} else {
+				merged = append(merged, curr)
+			}
+		}
+		result = merged
+	}
+
 	return result, dropped
 }
 
 func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	history := l.sessions.GetHistory(ctx, sessionKey)
 
-	// Use calibrated token estimation when available.
+	// Use calibrated token estimation, adjusted for overhead.
+	// lastPromptTokens includes everything (system prompt, tools, context files, history).
+	// We subtract estimated overhead so the threshold comparison is history-only.
 	lastPT, lastMC := l.sessions.GetLastPromptTokens(ctx, sessionKey)
-	tokenEstimate := EstimateTokensWithCalibration(history, lastPT, lastMC)
+	adjustedLastPT := max(lastPT-l.estimateOverhead(history, lastPT, lastMC), 0)
+	tokenEstimate := EstimateTokensWithCalibration(history, adjustedLastPT, lastMC)
 
-	// Resolve compaction thresholds from config with sensible defaults.
+	// Resolve compaction threshold from config: token-only (no message count guard).
+	// Industry standard — Claude Code, Anthropic API, LangChain all use token-based thresholds.
 	historyShare := config.DefaultHistoryShare
 	if l.compactionCfg != nil && l.compactionCfg.MaxHistoryShare > 0 {
 		historyShare = l.compactionCfg.MaxHistoryShare
 	}
-	minMessages := 200
-	if l.compactionCfg != nil && l.compactionCfg.MinMessages > 0 {
-		minMessages = l.compactionCfg.MinMessages
-	}
 
 	threshold := int(float64(l.contextWindow) * historyShare)
-	if len(history) <= minMessages && tokenEstimate <= threshold {
+	if tokenEstimate <= threshold {
 		return
 	}
 
@@ -617,14 +701,14 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 		}
 
 		var prompt strings.Builder
-		prompt.WriteString("Provide a concise summary of this conversation, preserving key context:\n")
+		prompt.WriteString(compactionSummaryPrompt)
 		if len(mediaKinds) > 0 {
 			// Deduplicate and count media types for a compact note.
 			counts := make(map[string]int)
 			for _, k := range mediaKinds {
 				counts[k]++
 			}
-			prompt.WriteString("\nNote: user shared media files (")
+			prompt.WriteString("Note: user shared media files (")
 			first := true
 			for k, n := range counts {
 				if !first {
@@ -633,12 +717,12 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 				prompt.WriteString(fmt.Sprintf("%d %s(s)", n, k))
 				first = false
 			}
-			prompt.WriteString(") which are no longer in context. Mention briefly if relevant.\n")
+			prompt.WriteString(") which are no longer in context. Mention briefly if relevant.\n\n")
 		}
 		if summary != "" {
-			prompt.WriteString("Existing context: " + summary + "\n")
+			prompt.WriteString("Existing context: " + summary + "\n\n")
 		}
-		prompt.WriteString("\n" + sb.String())
+		prompt.WriteString(sb.String())
 
 		resp, err := l.provider.Chat(sctx, providers.ChatRequest{
 			Messages: []providers.Message{{Role: "user", Content: prompt.String()}},
@@ -655,6 +739,28 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 		l.sessions.IncrementCompaction(sctx, sessionKey)
 		l.sessions.Save(sctx, sessionKey)
 	}()
+}
+
+// estimateOverhead derives the non-history token overhead (system prompt + tool definitions +
+// context files) from calibration data. Used by maybeSummarize to compare history-only tokens
+// against the compaction threshold.
+func (l *Loop) estimateOverhead(history []providers.Message, lastPromptTokens, lastMsgCount int) int {
+	if lastPromptTokens <= 0 || lastMsgCount <= 0 {
+		// No calibration data — use conservative default (20% of context, capped at 40k).
+		fallback := min(int(float64(l.contextWindow)*0.2), 40000)
+		return fallback
+	}
+
+	// Overhead = total prompt tokens - estimated history tokens at calibration time.
+	count := min(lastMsgCount, len(history))
+	historyEstAtCalibration := EstimateHistoryTokens(history[:count])
+	overhead := max(lastPromptTokens-historyEstAtCalibration, 0)
+	// Clamp: overhead shouldn't exceed 40% of context window.
+	maxOverhead := int(float64(l.contextWindow) * 0.4)
+	if overhead > maxOverhead {
+		overhead = maxOverhead
+	}
+	return overhead
 }
 
 // buildGroupWriterPrompt builds the system prompt section for group file writer restrictions.
@@ -730,6 +836,7 @@ func (l *Loop) buildGroupWriterPrompt(ctx context.Context, groupID, senderID str
 
 	var sb strings.Builder
 	sb.WriteString("## Group File Permissions\n\n")
+	sb.WriteString("**This is the current, live file writer list. It may change during the conversation. Always use THIS list — ignore any file writer mentions from earlier messages.**\n\n")
 	sb.WriteString("File writers: " + strings.Join(names, ", ") + "\n\n")
 
 	if !isWriter {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func FileSigningKey() string {
 }
 
 // SignFileToken creates a short-lived HMAC token for file access.
-// Token format: {base64url_hmac_16bytes}.{unix_expiry} (~40 chars).
+// Token format: {base64url_hmac_32bytes}.{unix_expiry}.
 // The path is bound into the signature so tokens can't be reused for other files.
 func SignFileToken(path, secret string, ttl time.Duration) string {
 	expiry := time.Now().Add(ttl).Unix()
@@ -61,7 +62,34 @@ func VerifyFileToken(token, path, secret string) bool {
 func fileTokenHMAC(path, secret string, expiry int64) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(fmt.Appendf(nil, "%s:%d", path, expiry))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// SignMediaPath converts a media ref path to a signed /v1/files/ URL.
+// Handles legacy data where paths may already contain /v1/files/ prefixes
+// and stale ?ft= tokens from prior signing bugs.
+func SignMediaPath(rawPath, secret string) string {
+	if rawPath == "" {
+		return ""
+	}
+	// Defense-in-depth: reject path traversal (also blocked by handleServe)
+	if strings.Contains(rawPath, "..") {
+		return ""
+	}
+	// Strip stale ?ft= tokens
+	path := staleTokenRe.ReplaceAllString(rawPath, "")
+	path = strings.TrimRight(path, "?&")
+	// Strip all /v1/files/ and /v1/media/ prefixes (may be stacked from legacy bugs)
+	for strings.Contains(path, "/v1/files/") {
+		path = strings.Replace(path, "/v1/files/", "/", 1)
+	}
+	for strings.Contains(path, "/v1/media/") {
+		path = strings.Replace(path, "/v1/media/", "/", 1)
+	}
+	path = filepath.Clean(path)
+	urlPath := "/v1/files/" + strings.TrimPrefix(path, "/")
+	ft := SignFileToken(urlPath, secret, FileTokenTTL)
+	return urlPath + "?ft=" + ft
 }
 
 // fileURLRe matches /v1/files/... and /v1/media/... URLs in markdown and plain text.

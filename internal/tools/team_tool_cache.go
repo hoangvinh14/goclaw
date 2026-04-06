@@ -297,6 +297,6 @@ func taskTeamWorkspace(task *store.TeamTaskData) string {
 	if task.Metadata == nil {
 		return ""
 	}
-	ws, _ := task.Metadata["team_workspace"].(string)
+	ws, _ := task.Metadata[TaskMetaTeamWorkspace].(string)
 	return ws
 }

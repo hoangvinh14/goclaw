@@ -10,7 +10,7 @@ func init() {
 		MsgInvalidRequest:   "invalid request: %s",
 		MsgInvalidJSON:      "invalid JSON",
 		MsgUnauthorized:     "unauthorized",
-		MsgPermissionDenied: "permission denied: insufficient role for %s",
+		MsgPermissionDenied: "permission denied: %s",
 		MsgInternalError:    "internal error: %s",
 		MsgInvalidSlug:      "%s must be a valid slug (lowercase letters, numbers, hyphens only)",
 		MsgFailedToList:     "failed to list %s",

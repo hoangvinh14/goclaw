@@ -4,9 +4,49 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ---
 
+## [v2.66.0] — 2026-04-05
+
+### Security
+- **Session IDOR fix**: All 5 chat.* WS methods (send, history, inject, abort, session.status) now verify session ownership. Non-admin users cannot read, write, or disrupt other users' sessions
+- **`requireSessionOwner` helper**: Extracted shared ownership check to `access.go` (DRY — pattern was repeated 9x in sessions.go)
+
+### Added
+- **BytePlus ModelArk provider**: Seedream image generation + Seedance video generation via BytePlus/Volcengine API
+- **Per-agent CLI grants**: Secure CLI binaries can now be granted/denied per agent with setting overrides
+- **Beta release pipeline**: `release-beta.yaml` — push `v*-beta*` tag from dev to create prerelease with Docker images + binaries
+
+### Fixed
+- **Scheduler test hang**: Defer ordering fix prevents CI timeout when test fails before unblocking goroutines
+- **Semantic-release branch**: `--no-ci` flag bypasses default branch check (repo default is dev, releases cut from main)
+- **OpenAI compat**: Together/Mistral reasoning, streaming, and vision gating; Mistral tool call ID normalization
+
+### Changed
+- **Docker builds**: Removed redundant `docker-publish.yaml` — `release.yaml` handles all Docker builds on release
+- **Desktop prerelease**: `release-desktop.yaml` auto-detects beta/rc tags and marks as prerelease
+
+### Refactored
+- **Web UI**: React-arch audit — RHF+Zod forms, Zustand persist, adapter layer, component modularization
+- **Desktop UI**: React-arch audit — schemas, RHF forms, file splits, services, store cleanup
+
+---
+
 ## [Unreleased]
 
 ### Added
+
+#### Parallel Sub-Agent Enhancement (#600) (2026-03-31)
+- **Smart leader delegation**: Conditional leader delegation prompt instead of forced delegation for all subagent spawns
+- **Compaction prompt persistence**: Preserves pending subagent and team task state across context summarization to maintain work continuity
+- **DB persistence**: `subagent_tasks` table (migration 000034) with `SubagentTaskStore` interface and PostgreSQL implementation. Write-through persistence from SubagentManager ensures durable task tracking
+- **Token cost tracking**: Per-subagent input/output token accumulation. Token costs included in announce messages and persisted in DB for billing/observability
+- **Per-edition rate limiting**: `MaxSubagentConcurrent` and `MaxSubagentDepth` limits on Edition struct. Tenant-scoped concurrency prevents single tenant from hogging subagent resources
+- **WaitAll orchestration**: `spawn(action=wait, timeout=N)` blocks parent until all spawned children complete. Enables coordinated multi-step workflows
+- **Auto-retry with backoff**: Configurable `MaxRetries` (default 2) with linear backoff for LLM failures. Improves reliability without manual intervention
+- **Producer-consumer announce queue**: Merges staggered subagent results into single LLM run announcement. Reduces token overhead vs per-result notifications
+- **Telegram subagent commands**: `/subagents` lists all active subagent tasks with status. `/subagent <id>` shows detailed view from DB
+- **Subagent blocking in subagents**: `SubagentDenyAlways` blocks `team_tasks` tool to prevent nested task delegation
+- **Functional options pattern**: Telegram provider refactored to `telegram.New()` with `WithXxxStore()` option setters for cleaner initialization
+- **File organization**: Subagent code split into focused modules: `subagent.go`, `subagent_roster.go`, `subagent_spawn.go`. Spawn tool split: `spawn_tool.go` + `spawn_tool_actions.go`
 
 #### Runtime & Packages Management (2026-03-17)
 - **Packages page**: New "Packages" page in Web UI under System group for managing installed packages

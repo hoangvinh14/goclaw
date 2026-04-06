@@ -183,16 +183,14 @@ func (m *TeamToolManager) createEscalationTask(ctx context.Context, team *store.
 		return ErrorResult("failed to create escalation task: " + err.Error())
 	}
 
-	m.broadcastTeamEvent(ctx, protocol.EventTeamTaskCreated, protocol.TeamTaskEventPayload{
-		TeamID:    team.ID.String(),
-		TaskID:    task.ID.String(),
-		Subject:   subject,
-		Status:    store.TeamTaskStatusPending,
-		UserID:    store.UserIDFromContext(ctx),
-		Channel:   ToolChannelFromCtx(ctx),
-		ChatID:    ToolChatIDFromCtx(ctx),
-		Timestamp: task.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-	})
+	m.broadcastTeamEvent(ctx, protocol.EventTeamTaskCreated, BuildTaskEventPayload(
+		team.ID.String(), task.ID.String(),
+		store.TeamTaskStatusPending,
+		"", "",
+		WithSubject(subject),
+		WithContextInfo(ctx),
+		WithTimestamp(task.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")),
+	))
 
 	// Notify channel if possible.
 	m.notifyChannelReview(task)

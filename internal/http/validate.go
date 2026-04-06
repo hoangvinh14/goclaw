@@ -38,6 +38,7 @@ var agentAllowedFields = map[string]bool{
 	"workspace": true,
 	"frontmatter": true, "compaction_config": true,
 	"memory_config": true, "other_config": true, "tools_config": true,
+	"sandbox_config": true, "context_pruning": true,
 	"is_default": true, "budget_monthly_cents": true, "subagents_config": true,
 }
 
@@ -63,7 +64,7 @@ var mcpServerAllowedFields = map[string]bool{
 }
 
 var channelInstanceAllowedFields = map[string]bool{
-	"channel_type": true, "credentials": true, "agent_id": true,
+	"name": true, "channel_type": true, "credentials": true, "agent_id": true,
 	"enabled": true, "group_policy": true, "allow_from": true,
 	"metadata": true, "webhook_secret": true, "config": true,
 	"display_name": true,

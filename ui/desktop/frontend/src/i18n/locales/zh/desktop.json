@@ -77,7 +77,18 @@
     "maxTeamMembers": "5 max",
     "databaseValue": "SQLite (local)",
     "usersValue": "Single user",
-    "builtWith": "Built with Go + React + Wails"
+    "builtWith": "Built with Go + React + Wails",
+    "reset": {
+      "title": "危险区域",
+      "description": "删除数据库并重启应用。所有智能体、会话、提供商和设置将被永久删除。",
+      "button": "重置数据库",
+      "confirmTitle": "重置数据库？",
+      "confirmDescription": "此操作将删除所有数据并从头开始重启应用。",
+      "confirmPrompt": "输入 {{word}} 以确认",
+      "cancel": "取消",
+      "confirm": "重置并重启",
+      "resetting": "重置中..."
+    }
   },
   "presets": {
     "researcher": {

@@ -167,9 +167,8 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 				slog.Warn("failed to create team workspace directory", "workspace", wsDir, "error", err)
 			}
 			ctx = tools.WithToolTeamWorkspace(ctx, wsDir)
-			if team.LeadAgentID == l.agentUUID {
-				ctx = tools.WithToolWorkspace(ctx, wsDir)
-			}
+			// Leader keeps personal workspace (set at line 110-132) as default.
+			// Team workspace accessible via ToolTeamWorkspaceFromCtx for delegation.
 			if req.TeamID == "" {
 				ctx = tools.WithToolTeamID(ctx, team.ID.String())
 			}
@@ -209,6 +208,10 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 
 	// Inject agent key into context for tool-level resolution (multiple agents share tool registry)
 	ctx = tools.WithToolAgentKey(ctx, l.id)
+
+	// Inject delivered media tracker so write_file and message tool can coordinate:
+	// write_file(deliver=true) marks paths, message self-send guard checks before allowing.
+	ctx = tools.WithDeliveredMedia(ctx, tools.NewDeliveredMedia())
 
 	// Security: truncate oversized user messages gracefully (feed truncation notice into LLM)
 	maxChars := l.maxMessageChars

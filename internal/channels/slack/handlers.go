@@ -86,9 +86,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 		peerKind = "direct"
 	}
 
-	// Resolve display name; strip "|" to prevent compound senderID corruption
-	displayName := strings.ReplaceAll(c.resolveDisplayName(senderID), "|", "_")
-	compoundSenderID := fmt.Sprintf("%s|%s", senderID, displayName)
+	displayName := c.resolveDisplayName(senderID)
 
 	// Policy check
 	if isDM {
@@ -103,7 +101,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 
 	// For DMs, apply global allowlist filter (allow_from contains user IDs).
 	// For groups, skip — group policy already handles channel/user filtering.
-	if isDM && !c.IsAllowed(compoundSenderID) {
+	if isDM && !c.IsAllowed(senderID) {
 		slog.Debug("slack message rejected by allowlist",
 			"user_id", senderID, "display_name", displayName)
 		return
@@ -200,7 +198,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 
 			// Collect contact even when bot is not mentioned (cache prevents DB spam).
 			if cc := c.ContactCollector(); cc != nil {
-				cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, senderID, displayName, "", "group")
+				cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, senderID, displayName, "", "group", "user", "", "")
 			}
 
 			slog.Debug("slack group message recorded (no mention)",
@@ -253,6 +251,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 		"message_id":      ev.TimeStamp,
 		"user_id":         senderID,
 		"username":        displayName,
+		"display_name":    displayName,
 		"channel_id":      channelID,
 		"is_dm":           fmt.Sprintf("%t", isDM),
 		"local_key":       localKey,
@@ -264,7 +263,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 
 	// Message debounce: batch rapid messages per-thread
 	if c.debounceDelay > 0 {
-		if c.debounceMessage(localKey, compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind) {
+		if c.debounceMessage(localKey, senderID, channelID, finalContent, mediaPaths, metadata, peerKind) {
 			// Record thread participation even when debounced
 			if peerKind == "group" && replyThreadTS != "" {
 				participKey := channelID + ":particip:" + replyThreadTS
@@ -274,7 +273,7 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 		}
 	}
 
-	c.HandleMessage(compoundSenderID, channelID, finalContent, mediaPaths, metadata, peerKind)
+	c.HandleMessage(senderID, channelID, finalContent, mediaPaths, metadata, peerKind)
 
 	// Record thread participation for auto-reply cache
 	if peerKind == "group" {

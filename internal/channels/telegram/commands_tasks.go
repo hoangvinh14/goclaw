@@ -203,6 +203,11 @@ func (c *Channel) handleCallbackQuery(ctx context.Context, query *telego.Callbac
 		CallbackQueryID: query.ID,
 	})
 
+	if strings.HasPrefix(query.Data, "sa:") {
+		c.handleSubagentCallback(ctx, query)
+		return
+	}
+
 	if !strings.HasPrefix(query.Data, "td:") {
 		return
 	}

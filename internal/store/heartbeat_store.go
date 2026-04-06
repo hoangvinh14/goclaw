@@ -116,8 +116,8 @@ type HeartbeatStore interface {
 	InsertLog(ctx context.Context, log *HeartbeatRunLog) error
 	ListLogs(ctx context.Context, agentID uuid.UUID, limit, offset int) ([]HeartbeatRunLog, int, error)
 
-	// Delivery targets — distinct (channel, chatID) from session history for an agent.
-	ListDeliveryTargets(ctx context.Context, agentID uuid.UUID) ([]DeliveryTarget, error)
+	// Delivery targets — known (channel, chatID) pairs from channel_contacts for a tenant.
+	ListDeliveryTargets(ctx context.Context, tenantID uuid.UUID) ([]DeliveryTarget, error)
 
 	// Events
 	SetOnEvent(fn func(HeartbeatEvent))

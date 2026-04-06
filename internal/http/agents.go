@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -26,10 +28,13 @@ type AgentsHandler struct {
 	providerReg      *providers.Registry
 	db               *sql.DB
 	tracingStore     store.TracingStore
-	defaultWorkspace string            // default workspace path template (e.g. "~/.goclaw/workspace")
-	msgBus           *bus.MessageBus   // for cache invalidation events (nil = no events)
-	summoner         *AgentSummoner    // LLM-based agent setup (nil = disabled)
-	isOwner          func(string) bool // checks if user ID is a system owner (nil = no owners configured)
+	memoryStore      store.MemoryStore         // for import (nil = disabled)
+	kgStore          store.KnowledgeGraphStore // for import (nil = disabled)
+	defaultWorkspace string                   // default workspace path template (e.g. "~/.goclaw/workspace")
+	dataDir          string                   // resolved data directory (e.g. "~/.goclaw/data") — for team workspace export
+	msgBus           *bus.MessageBus          // for cache invalidation events (nil = no events)
+	summoner         *AgentSummoner           // LLM-based agent setup (nil = disabled)
+	isOwner          func(string) bool        // checks if user ID is a system owner (nil = no owners configured)
 }
 
 // NewAgentsHandler creates a handler for agent management endpoints.
@@ -46,6 +51,17 @@ func NewAgentsHandler(agents store.AgentStore, providers store.ProviderStore, pr
 		summoner:         summoner,
 		isOwner:          isOwner,
 	}
+}
+
+// SetDataDir sets the resolved data directory used for team workspace paths.
+func (h *AgentsHandler) SetDataDir(dataDir string) {
+	h.dataDir = dataDir
+}
+
+// SetImportStores attaches optional stores needed for agent import.
+func (h *AgentsHandler) SetImportStores(mem store.MemoryStore, kg store.KnowledgeGraphStore) {
+	h.memoryStore = mem
+	h.kgStore = kg
 }
 
 // isOwnerUser checks if the given user ID is a system owner.
@@ -66,25 +82,48 @@ func (h *AgentsHandler) emitCacheInvalidate(kind, key string) {
 
 // RegisterRoutes registers all agent management routes on the given mux.
 func (h *AgentsHandler) RegisterRoutes(mux *http.ServeMux) {
+	// Agent CRUD (reads: viewer+, writes: admin+)
 	mux.HandleFunc("GET /v1/agents", h.authMiddleware(h.handleList))
-	mux.HandleFunc("POST /v1/agents", h.authMiddleware(h.handleCreate))
+	mux.HandleFunc("POST /v1/agents", h.adminMiddleware(h.handleCreate))
 	mux.HandleFunc("GET /v1/agents/{id}", h.authMiddleware(h.handleGet))
-	mux.HandleFunc("PUT /v1/agents/{id}", h.authMiddleware(h.handleUpdate))
-	mux.HandleFunc("DELETE /v1/agents/{id}", h.authMiddleware(h.handleDelete))
+	mux.HandleFunc("PUT /v1/agents/{id}", h.adminMiddleware(h.handleUpdate))
+	mux.HandleFunc("DELETE /v1/agents/{id}", h.adminMiddleware(h.handleDelete))
+	// Sharing (admin+)
 	mux.HandleFunc("GET /v1/agents/{id}/shares", h.authMiddleware(h.handleListShares))
-	mux.HandleFunc("POST /v1/agents/{id}/shares", h.authMiddleware(h.handleShare))
-	mux.HandleFunc("DELETE /v1/agents/{id}/shares/{userID}", h.authMiddleware(h.handleRevokeShare))
-	mux.HandleFunc("POST /v1/agents/{id}/regenerate", h.authMiddleware(h.handleRegenerate))
-	mux.HandleFunc("POST /v1/agents/{id}/resummon", h.authMiddleware(h.handleResummon))
+	mux.HandleFunc("POST /v1/agents/{id}/shares", h.adminMiddleware(h.handleShare))
+	mux.HandleFunc("DELETE /v1/agents/{id}/shares/{userID}", h.adminMiddleware(h.handleRevokeShare))
+	// Agent operations (admin+)
+	mux.HandleFunc("POST /v1/agents/{id}/regenerate", h.adminMiddleware(h.handleRegenerate))
+	mux.HandleFunc("POST /v1/agents/{id}/resummon", h.adminMiddleware(h.handleResummon))
+	// Export (agent owner or system owner)
+	mux.HandleFunc("GET /v1/agents/{id}/export/preview", h.authMiddleware(h.handleExportPreview))
+	mux.HandleFunc("GET /v1/agents/{id}/export", h.authMiddleware(h.handleExport))
+	mux.HandleFunc("GET /v1/agents/{id}/export/download/{token}", h.authMiddleware(h.handleExportDownload))
+	// Shared download route for all export types (skills, MCP, teams use same token map)
+	mux.HandleFunc("GET /v1/export/download/{token}", h.authMiddleware(h.handleExportDownload))
+	// Import (admin only — system owner or tenant admin)
+	mux.HandleFunc("POST /v1/agents/import/preview", h.adminMiddleware(h.handleImportPreview))
+	mux.HandleFunc("POST /v1/agents/import", h.adminMiddleware(h.handleImport))
+	mux.HandleFunc("POST /v1/agents/{id}/import", h.adminMiddleware(h.handleMergeImport))
+	// Team export/import (system owner only)
+	mux.HandleFunc("GET /v1/teams/{id}/export/preview", h.adminMiddleware(h.handleTeamExportPreview))
+	mux.HandleFunc("GET /v1/teams/{id}/export", h.adminMiddleware(h.handleTeamExport))
+	mux.HandleFunc("POST /v1/teams/import", h.adminMiddleware(h.handleTeamImport))
+	// Read-only (viewer+)
 	mux.HandleFunc("GET /v1/agents/{id}/codex-pool-activity", h.authMiddleware(h.handleCodexPoolActivity))
 	mux.HandleFunc("GET /v1/agents/{id}/instances", h.authMiddleware(h.handleListInstances))
 	mux.HandleFunc("GET /v1/agents/{id}/instances/{userID}/files", h.authMiddleware(h.handleGetInstanceFiles))
-	mux.HandleFunc("PUT /v1/agents/{id}/instances/{userID}/files/{fileName}", h.authMiddleware(h.handleSetInstanceFile))
-	mux.HandleFunc("PATCH /v1/agents/{id}/instances/{userID}/metadata", h.authMiddleware(h.handleUpdateInstanceMetadata))
+	// Instance writes (admin+)
+	mux.HandleFunc("PUT /v1/agents/{id}/instances/{userID}/files/{fileName}", h.adminMiddleware(h.handleSetInstanceFile))
+	mux.HandleFunc("PATCH /v1/agents/{id}/instances/{userID}/metadata", h.adminMiddleware(h.handleUpdateInstanceMetadata))
 }
 
 func (h *AgentsHandler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth("", next)
+}
+
+func (h *AgentsHandler) adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(permissions.RoleAdmin, next)
 }
 
 func (h *AgentsHandler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +355,11 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sync display_name change into IDENTITY.md so the agent self-reports the new name.
+	if newName, ok := allowed["display_name"].(string); ok && newName != "" {
+		h.syncIdentityName(r.Context(), ag, newName)
+	}
+
 	// Invalidate caches: agent Loop + bootstrap files
 	h.emitCacheInvalidate(bus.CacheKindAgent, ag.AgentKey)
 	h.emitCacheInvalidate(bus.CacheKindBootstrap, id.String())
@@ -335,6 +379,45 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	emitAudit(h.msgBus, r, "agent.updated", "agent", id.String())
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// syncIdentityName updates the Name: field in the agent's IDENTITY.md (agent-level and
+// all per-user copies for open agents) so the agent self-reports the new display name.
+// Errors are logged but do not fail the rename request.
+func (h *AgentsHandler) syncIdentityName(ctx context.Context, ag *store.AgentData, newName string) {
+	// Read existing agent-level IDENTITY.md.
+	existingContent := ""
+	if dbFiles, err := h.agents.GetAgentContextFiles(ctx, ag.ID); err == nil {
+		for _, f := range dbFiles {
+			if f.FileName == bootstrap.IdentityFile {
+				existingContent = f.Content
+				break
+			}
+		}
+	}
+
+	newContent := bootstrap.UpdateIdentityField(existingContent, "Name", newName)
+	if newContent == "" {
+		newContent = "# Identity\nName: " + newName + "\n"
+	}
+	if err := h.agents.SetAgentContextFile(ctx, ag.ID, bootstrap.IdentityFile, newContent); err != nil {
+		slog.Warn("agents.update: failed to sync IDENTITY.md name", "agent", ag.AgentKey, "error", err)
+	}
+
+	// For open agents, also update per-user IDENTITY.md copies.
+	if ag.AgentType == store.AgentTypeOpen {
+		if userFiles, err := h.agents.ListUserContextFilesByName(ctx, ag.ID, bootstrap.IdentityFile); err == nil {
+			for _, uf := range userFiles {
+				updated := bootstrap.UpdateIdentityField(uf.Content, "Name", newName)
+				if updated == uf.Content {
+					continue
+				}
+				if err := h.agents.SetUserContextFile(ctx, ag.ID, uf.UserID, bootstrap.IdentityFile, updated); err != nil {
+					slog.Warn("agents.update: failed to sync user IDENTITY.md name", "agent", ag.AgentKey, "user", uf.UserID, "error", err)
+				}
+			}
+		}
+	}
 }
 
 func (h *AgentsHandler) handleDelete(w http.ResponseWriter, r *http.Request) {

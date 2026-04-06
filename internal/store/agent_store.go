@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
 
 // sanitizeToolCallPrefix strips characters not in [a-z0-9_{}] from the prefix.
@@ -155,22 +156,71 @@ func (a *AgentData) ParseMemoryConfig() *config.MemoryConfig {
 	return &c
 }
 
-// ParseThinkingLevel extracts thinking_level from other_config JSONB.
-// Returns "low" if not configured (default thinking mode).
+// ParseThinkingLevel extracts the normalized reasoning effort from other_config JSONB.
+// Missing config defaults to "off" to match the dashboard and docs.
 func (a *AgentData) ParseThinkingLevel() string {
+	return a.ParseReasoningConfig().Effort
+}
+
+// ParseReasoningConfig extracts additive advanced reasoning settings from other_config.
+// Legacy thinking_level remains a backward-compatible fallback source.
+func (a *AgentData) ParseReasoningConfig() AgentReasoningConfig {
+	cfg := AgentReasoningConfig{
+		OverrideMode: ReasoningOverrideInherit,
+		Effort:       "off",
+		Fallback:     ReasoningFallbackDowngrade,
+		Source:       ReasoningSourceUnset,
+	}
 	if len(a.OtherConfig) == 0 {
-		return "low"
+		return cfg
 	}
-	var cfg struct {
-		ThinkingLevel string `json:"thinking_level"`
+
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(a.OtherConfig, &raw) != nil {
+		return cfg
 	}
-	if json.Unmarshal(a.OtherConfig, &cfg) != nil {
-		return "low"
+
+	var reasoning struct {
+		OverrideMode string `json:"override_mode"`
+		Effort       string `json:"effort"`
+		Fallback     string `json:"fallback"`
 	}
-	if cfg.ThinkingLevel == "" {
-		return "low"
+	explicitInherit := false
+	if data, ok := raw["reasoning"]; ok && len(data) > 0 && json.Unmarshal(data, &reasoning) == nil {
+		if reasoning.OverrideMode == ReasoningOverrideInherit {
+			explicitInherit = true
+			cfg.OverrideMode = ReasoningOverrideInherit
+			cfg.Source = ReasoningSourceUnset
+			cfg.Effort = "off"
+			cfg.Fallback = ReasoningFallbackDowngrade
+		} else {
+			cfg.OverrideMode = ReasoningOverrideCustom
+			cfg.Source = ReasoningSourceAdvanced
+			if effort := normalizeReasoningEffort(reasoning.Effort); effort != "" {
+				cfg.Effort = effort
+			}
+			cfg.Fallback = normalizeReasoningFallback(reasoning.Fallback)
+		}
 	}
-	return cfg.ThinkingLevel
+
+	if !explicitInherit {
+		if data, ok := raw["thinking_level"]; ok && len(data) > 0 {
+			var legacy string
+			if json.Unmarshal(data, &legacy) == nil {
+				if effort := normalizeReasoningEffort(legacy); effort != "" {
+					if cfg.Source == ReasoningSourceUnset {
+						cfg.OverrideMode = ReasoningOverrideCustom
+						cfg.Source = ReasoningSourceLegacy
+						cfg.Effort = effort
+					} else if cfg.Effort == "off" {
+						cfg.Effort = effort
+					}
+				}
+			}
+		}
+	}
+
+	return cfg
 }
 
 // ParseMaxTokens extracts max_tokens from other_config JSONB.
@@ -238,6 +288,16 @@ func (a *AgentData) ParseSkillNudgeInterval() int {
 	return *cfg.SkillNudgeInterval
 }
 
+// normalizeReasoningEffort delegates to providers.NormalizeReasoningEffort (DRY).
+func normalizeReasoningEffort(value string) string {
+	return providers.NormalizeReasoningEffort(value)
+}
+
+// normalizeReasoningFallback delegates to providers.NormalizeReasoningFallback (DRY).
+func normalizeReasoningFallback(value string) string {
+	return providers.NormalizeReasoningFallback(value)
+}
+
 // WorkspaceSharingConfig controls per-user workspace isolation.
 // When shared_dm/shared_group is true, users share the base workspace directory
 // instead of each getting an isolated subfolder.
@@ -247,6 +307,63 @@ type WorkspaceSharingConfig struct {
 	SharedUsers         []string `json:"shared_users,omitempty"`
 	ShareMemory         bool     `json:"share_memory"`
 	ShareKnowledgeGraph bool     `json:"share_knowledge_graph"`
+}
+
+const (
+	ReasoningSourceUnset             = "unset"
+	ReasoningSourceLegacy            = "thinking_level"
+	ReasoningSourceAdvanced          = "reasoning"
+	ReasoningSourceProviderDefault   = "provider_default"
+	// Reasoning fallback constants — canonical definitions in providers package.
+	ReasoningFallbackDowngrade       = providers.ReasoningFallbackDowngrade
+	ReasoningFallbackDisable         = providers.ReasoningFallbackDisable
+	ReasoningFallbackProviderDefault = providers.ReasoningFallbackProviderDefault
+	ReasoningOverrideInherit         = "inherit"
+	ReasoningOverrideCustom          = "custom"
+)
+
+type AgentReasoningConfig struct {
+	OverrideMode string `json:"override_mode,omitempty"`
+	Effort       string `json:"effort,omitempty"`
+	Fallback     string `json:"fallback,omitempty"`
+	Source       string `json:"-"`
+}
+
+// ResolveEffectiveReasoningConfig applies provider-owned defaults unless the agent
+// has an explicit custom reasoning override.
+func ResolveEffectiveReasoningConfig(
+	providerDefaults *ProviderReasoningConfig,
+	agentConfig AgentReasoningConfig,
+) AgentReasoningConfig {
+	if agentConfig.OverrideMode == "" {
+		agentConfig.OverrideMode = ReasoningOverrideInherit
+	}
+	if agentConfig.Fallback == "" {
+		agentConfig.Fallback = ReasoningFallbackDowngrade
+	}
+	if agentConfig.Effort == "" {
+		agentConfig.Effort = "off"
+	}
+
+	if agentConfig.OverrideMode == ReasoningOverrideCustom {
+		return agentConfig
+	}
+
+	if providerDefaults == nil {
+		return AgentReasoningConfig{
+			OverrideMode: ReasoningOverrideInherit,
+			Effort:       "off",
+			Fallback:     ReasoningFallbackDowngrade,
+			Source:       ReasoningSourceUnset,
+		}
+	}
+
+	return AgentReasoningConfig{
+		OverrideMode: ReasoningOverrideInherit,
+		Effort:       providerDefaults.Effort,
+		Fallback:     providerDefaults.Fallback,
+		Source:       ReasoningSourceProviderDefault,
+	}
 }
 
 const (
@@ -503,8 +620,15 @@ type AgentContextStore interface {
 	SetAgentContextFile(ctx context.Context, agentID uuid.UUID, fileName, content string) error
 	PropagateContextFile(ctx context.Context, agentID uuid.UUID, fileName string) (int, error)
 	GetUserContextFiles(ctx context.Context, agentID uuid.UUID, userID string) ([]UserContextFileData, error)
+	// ListUserContextFilesByName returns all per-user copies of fileName across all users of agentID.
+	// Used for bulk targeted updates (e.g. updating Name: in IDENTITY.md on agent rename).
+	ListUserContextFilesByName(ctx context.Context, agentID uuid.UUID, fileName string) ([]UserContextFileData, error)
 	SetUserContextFile(ctx context.Context, agentID uuid.UUID, userID, fileName, content string) error
 	DeleteUserContextFile(ctx context.Context, agentID uuid.UUID, userID, fileName string) error
+	// MigrateUserDataOnMerge moves per-user data from oldUserIDs to newUserID when contacts are merged.
+	// Covers: user_context_files, user_agent_overrides, user_agent_profiles, memory_documents/chunks.
+	// On conflict, keeps the newest by updated_at. Best-effort per table.
+	MigrateUserDataOnMerge(ctx context.Context, oldUserIDs []string, newUserID string) error
 	GetUserOverride(ctx context.Context, agentID uuid.UUID, userID string) (*UserAgentOverrideData, error)
 	SetUserOverride(ctx context.Context, override *UserAgentOverrideData) error
 }

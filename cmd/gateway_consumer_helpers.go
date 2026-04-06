@@ -11,6 +11,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 // resolveAgentRoute determines which agent should handle a message
@@ -98,9 +99,9 @@ func buildAnnounceOutMeta(localKey string) map[string]string {
 	}
 	meta := map[string]string{"local_key": localKey}
 	if idx := strings.Index(localKey, ":topic:"); idx > 0 {
-		meta["message_thread_id"] = localKey[idx+7:]
+		meta[tools.MetaMessageThreadID] = localKey[idx+7:]
 	} else if idx := strings.Index(localKey, ":thread:"); idx > 0 {
-		meta["message_thread_id"] = localKey[idx+8:]
+		meta[tools.MetaMessageThreadID] = localKey[idx+8:]
 	}
 	return meta
 }

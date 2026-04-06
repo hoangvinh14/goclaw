@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +38,8 @@ func (s *PGKnowledgeGraphStore) UpsertEntity(ctx context.Context, entity *store.
 	now := time.Now()
 	id := uuid.Must(uuid.NewV7())
 	tid := tenantIDForInsert(ctx)
-	_, err = s.db.ExecContext(ctx, `
+	var actualID uuid.UUID
+	if err = s.db.QueryRowContext(ctx, `
 		INSERT INTO kg_entities
 			(id, agent_id, user_id, external_id, name, entity_type, description, properties, source_id, confidence, tenant_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
@@ -51,11 +51,17 @@ func (s *PGKnowledgeGraphStore) UpsertEntity(ctx context.Context, entity *store.
 			source_id   = EXCLUDED.source_id,
 			confidence  = EXCLUDED.confidence,
 			tenant_id   = EXCLUDED.tenant_id,
-			updated_at  = EXCLUDED.updated_at`,
+			updated_at  = EXCLUDED.updated_at
+		RETURNING id`,
 		id, aid, entity.UserID, entity.ExternalID, entity.Name, entity.EntityType,
 		entity.Description, props, entity.SourceID, entity.Confidence, tid, now,
-	)
-	return err
+	).Scan(&actualID); err != nil {
+		return err
+	}
+
+	// Generate embedding in background (best-effort, non-blocking)
+	go s.EmbedEntity(context.WithoutCancel(ctx), actualID.String(), entity.Name, entity.Description)
+	return nil
 }
 
 func (s *PGKnowledgeGraphStore) GetEntity(ctx context.Context, agentID, userID, entityID string) (*store.Entity, error) {
@@ -167,8 +173,8 @@ func (s *PGKnowledgeGraphStore) SearchEntities(ctx context.Context, agentID, use
 
 	shared := store.IsSharedKG(ctx)
 
-	// ILIKE search
-	ilikeResults, err := s.ilikeSearchEntities(ctx, aid, userID, query, limit*2, shared)
+	// FTS search using tsvector
+	ftsResults, err := s.ftsSearchEntities(ctx, aid, userID, query, limit*2, shared)
 	if err != nil {
 		return nil, err
 	}
@@ -185,24 +191,24 @@ func (s *PGKnowledgeGraphStore) SearchEntities(ctx context.Context, agentID, use
 		}
 	}
 
-	// If no vector results, fall back to ILIKE-only
+	// If no vector results, fall back to FTS-only
 	if len(vecResults) == 0 {
-		if len(ilikeResults) > limit {
-			ilikeResults = ilikeResults[:limit]
+		if len(ftsResults) > limit {
+			ftsResults = ftsResults[:limit]
 		}
-		entities := make([]store.Entity, len(ilikeResults))
-		for i, r := range ilikeResults {
+		entities := make([]store.Entity, len(ftsResults))
+		for i, r := range ftsResults {
 			entities[i] = r.Entity
 		}
 		return entities, nil
 	}
 
-	// Hybrid merge with weights: 0.3 ILIKE, 0.7 vector
+	// Hybrid merge with weights: 0.3 FTS, 0.7 vector
 	textW, vecW := 0.3, 0.7
-	if len(ilikeResults) == 0 {
+	if len(ftsResults) == 0 {
 		textW, vecW = 0, 1.0
 	}
-	merged := hybridMergeEntities(ilikeResults, vecResults, textW, vecW)
+	merged := hybridMergeEntities(ftsResults, vecResults, textW, vecW)
 
 	if len(merged) > limit {
 		merged = merged[:limit]
@@ -215,13 +221,10 @@ type scoredEntity struct {
 	Score  float64
 }
 
-func (s *PGKnowledgeGraphStore) ilikeSearchEntities(ctx context.Context, agentID uuid.UUID, userID, query string, limit int, shared bool) ([]scoredEntity, error) {
-	escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(query)
-	pattern := "%" + escaped + "%"
-
-	where := "agent_id = $1"
-	args := []any{agentID}
-	idx := 2
+func (s *PGKnowledgeGraphStore) ftsSearchEntities(ctx context.Context, agentID uuid.UUID, userID, query string, limit int, shared bool) ([]scoredEntity, error) {
+	where := "agent_id = $1 AND tsv @@ plainto_tsquery('simple', $2)"
+	args := []any{agentID, query}
+	idx := 3
 	if !shared && userID != "" {
 		where += fmt.Sprintf(" AND user_id = $%d", idx)
 		args = append(args, userID)
@@ -236,13 +239,14 @@ func (s *PGKnowledgeGraphStore) ilikeSearchEntities(ctx context.Context, agentID
 		args = append(args, tcArgs...)
 		idx++
 	}
-	args = append(args, pattern, limit)
+	args = append(args, query, limit)
 	q := fmt.Sprintf(`
 		SELECT id, agent_id, user_id, external_id, name, entity_type, description,
-		       properties, source_id, confidence, created_at, updated_at
+		       properties, source_id, confidence, created_at, updated_at,
+		       ts_rank(tsv, plainto_tsquery('simple', $%d)) AS score
 		FROM kg_entities
-		WHERE %s AND (name ILIKE $%d ESCAPE '\' OR description ILIKE $%d ESCAPE '\')
-		ORDER BY confidence DESC, updated_at DESC LIMIT $%d`, where, idx, idx, idx+1)
+		WHERE %s
+		ORDER BY score DESC LIMIT $%d`, idx, where, idx+1)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -251,22 +255,22 @@ func (s *PGKnowledgeGraphStore) ilikeSearchEntities(ctx context.Context, agentID
 	defer rows.Close()
 
 	var results []scoredEntity
-	rank := 1.0
 	for rows.Next() {
 		var e store.Entity
 		var props []byte
 		var createdAt, updatedAt time.Time
+		var score float64
 		if err := rows.Scan(
 			&e.ID, &e.AgentID, &e.UserID, &e.ExternalID, &e.Name, &e.EntityType,
 			&e.Description, &props, &e.SourceID, &e.Confidence, &createdAt, &updatedAt,
+			&score,
 		); err != nil {
 			continue
 		}
 		json.Unmarshal(props, &e.Properties) //nolint:errcheck
 		e.CreatedAt = createdAt.UnixMilli()
 		e.UpdatedAt = updatedAt.UnixMilli()
-		results = append(results, scoredEntity{Entity: e, Score: rank})
-		rank *= 0.95 // decay for rank-based scoring
+		results = append(results, scoredEntity{Entity: e, Score: score})
 	}
 	return results, rows.Err()
 }

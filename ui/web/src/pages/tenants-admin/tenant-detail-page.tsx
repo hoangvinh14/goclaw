@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Plus, RefreshCw, Users, Trash2, Calendar, Hash, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +24,9 @@ import {
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { UserPickerCombobox } from "@/components/shared/user-picker-combobox";
+import { useContactResolver } from "@/hooks/use-contact-resolver";
+import { formatUserLabel } from "@/lib/format-user-label";
 import { useDeferredLoading } from "@/hooks/use-deferred-loading";
 import { useMinLoading } from "@/hooks/use-min-loading";
 import { useTenantDetail } from "./hooks/use-tenant-detail";
@@ -56,6 +58,10 @@ export function TenantDetailPage() {
 
   const spinning = useMinLoading(usersRefreshing);
   const showSkeleton = useDeferredLoading(usersLoading && users.length === 0);
+
+  // Resolve user IDs to display names via contacts
+  const userIds = useMemo(() => users.map((u) => u.user_id), [users]);
+  const { resolve } = useContactResolver(userIds);
 
   const [addOpen, setAddOpen] = useState(false);
   const [userId, setUserId] = useState("");
@@ -147,10 +153,10 @@ export function TenantDetailPage() {
               <div key={u.user_id} className="flex items-center justify-between rounded-lg border px-4 py-3 hover:bg-muted/30 transition-colors">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">
-                    {u.user_id.charAt(0)}
+                    {(u.display_name || formatUserLabel(u.user_id, resolve)).charAt(0)}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{u.user_id}</p>
+                    <p className="text-sm font-medium truncate">{u.display_name || formatUserLabel(u.user_id, resolve)}</p>
                     <p className="text-xs text-muted-foreground">{new Date(u.created_at).toLocaleDateString()}</p>
                   </div>
                 </div>
@@ -183,9 +189,14 @@ export function TenantDetailPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="add-user-id">{t("userId")}</Label>
-              <Input id="add-user-id" value={userId} onChange={(e) => setUserId(e.target.value)}
-                placeholder="user-id" className="text-base md:text-sm" />
+              <Label>{t("userId")}</Label>
+              <UserPickerCombobox
+                value={userId}
+                onChange={setUserId}
+                placeholder="user-id"
+                source="tenant_user"
+                allowCustom={true}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>{t("selectRole")}</Label>

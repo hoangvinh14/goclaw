@@ -5,15 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"slices"
+	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
@@ -23,7 +21,29 @@ import (
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
-func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) {
+// indexedResult holds the output of a single parallel tool execution, preserving
+// the original call index so results can be sorted back into deterministic order.
+type indexedResult struct {
+	idx          int
+	tc           providers.ToolCall
+	registryName string
+	result       *tools.Result
+	argsJSON     string
+	spanStart    time.Time
+}
+
+func (l *Loop) runLoop(ctx context.Context, req RunRequest) (result *RunResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 8192)
+			n := runtime.Stack(buf, false)
+			slog.Error("agent loop panicked", "agent", l.id, "session", req.SessionKey,
+				"panic", fmt.Sprint(r), "stack", string(buf[:n]))
+			result = nil
+			err = fmt.Errorf("agent loop panic: %v", r)
+		}
+	}()
+
 	// Per-run emit wrapper: enriches every AgentEvent with delegation + routing context.
 	emitRun := func(event AgentEvent) {
 		event.RunKind = req.RunKind
@@ -67,230 +87,11 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// (hadBootstrap) — no extra DB roundtrip needed for bootstrap detection.
 	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.ChannelType, req.ChatTitle, req.PeerKind, req.UserID, req.HistoryLimit, req.SkillFilter, req.LightContext)
 
-	// 1b. Determine image routing strategy.
-	// If read_image tool has a dedicated vision provider, images are NOT attached inline
-	// to the main LLM — the agent calls read_image tool instead. This avoids sending
-	// images to providers that don't support vision or have strict content filters.
-	deferToReadImageTool := l.hasReadImageProvider()
+	// 1b–2f. Persist and enrich all incoming media (images, docs, audio, video).
+	ctx, messages, mediaRefs := l.enrichInputMedia(ctx, &req, messages)
 
-	if !deferToReadImageTool {
-		// Inline mode: reload historical images directly into messages for main provider.
-		l.reloadMediaForMessages(messages, maxMediaReloadMessages)
-	}
-
-	// 2. Process media: sanitize images, persist to media store.
-	var mediaRefs []providers.MediaRef
-	if len(req.Media) > 0 {
-		mediaRefs = l.persistMedia(req.SessionKey, req.Media, tools.ToolWorkspaceFromCtx(ctx))
-		// Load current-turn images from persisted refs (Path is always set for new uploads).
-		var imageFiles []bus.MediaFile
-		for _, ref := range mediaRefs {
-			if ref.Kind == "image" && ref.Path != "" {
-				imageFiles = append(imageFiles, bus.MediaFile{Path: ref.Path, MimeType: ref.MimeType})
-			}
-		}
-		if deferToReadImageTool {
-			// File-ref mode: images primarily accessed via read_image(path=...).
-			// Still load into context as fallback — if LLM omits the path param,
-			// read_image can fall back to context images. This costs Go memory
-			// but NOT LLM tokens (base64 is in Go context, not sent to provider).
-			if images := loadImages(imageFiles); len(images) > 0 {
-				ctx = tools.WithMediaImages(ctx, images)
-			}
-			slog.Info("vision: file-ref mode, images accessible via read_image tool",
-				"count", len(imageFiles), "agent", l.id)
-		} else if images := loadImages(imageFiles); len(images) > 0 {
-			// Inline mode: read files, base64 encode, attach to message + context.
-			messages[len(messages)-1].Images = images
-			ctx = tools.WithMediaImages(ctx, images)
-			slog.Info("vision: attached images inline to main provider", "count", len(images), "agent", l.id)
-		}
-	}
-
-	// 2a. Load historical images into context for read_image tool.
-	// Both modes need this: inline mode for main LLM, file-ref mode as fallback
-	// when LLM calls read_image without the path param.
-	if l.mediaStore != nil {
-		ctx = l.loadHistoricalImagesForTool(ctx, mediaRefs, messages)
-	}
-
-	// 2b. Collect document MediaRefs (historical + current) for read_document tool.
-	// Historical first, current last — so refs[len-1] is always the most recent file.
-	var docRefs []providers.MediaRef
-	for i := len(messages) - 1; i >= 0; i-- {
-		for _, ref := range messages[i].MediaRefs {
-			if ref.Kind == "document" {
-				docRefs = append(docRefs, ref)
-			}
-		}
-	}
-	for _, ref := range mediaRefs {
-		if ref.Kind == "document" {
-			docRefs = append(docRefs, ref)
-		}
-	}
-	if len(docRefs) > 0 {
-		ctx = tools.WithMediaDocRefs(ctx, docRefs)
-		// Enrich the last user message with persisted file paths so skills can access
-		// documents via exec (e.g. pypdf). Only for current-turn refs (just persisted).
-		l.enrichDocumentPaths(messages, mediaRefs)
-	}
-
-	// 2c. Collect audio MediaRefs (historical + current) for read_audio tool.
-	var audioRefs []providers.MediaRef
-	for i := len(messages) - 1; i >= 0; i-- {
-		for _, ref := range messages[i].MediaRefs {
-			if ref.Kind == "audio" {
-				audioRefs = append(audioRefs, ref)
-			}
-		}
-	}
-	for _, ref := range mediaRefs {
-		if ref.Kind == "audio" {
-			audioRefs = append(audioRefs, ref)
-		}
-	}
-	if len(audioRefs) > 0 {
-		ctx = tools.WithMediaAudioRefs(ctx, audioRefs)
-		// Embed media IDs into <media:audio> tags so LLM can reference them.
-		l.enrichAudioIDs(messages, mediaRefs)
-	}
-
-	// 2d. Collect video MediaRefs (historical + current) for read_video tool.
-	var videoRefs []providers.MediaRef
-	for i := len(messages) - 1; i >= 0; i-- {
-		for _, ref := range messages[i].MediaRefs {
-			if ref.Kind == "video" {
-				videoRefs = append(videoRefs, ref)
-			}
-		}
-	}
-	for _, ref := range mediaRefs {
-		if ref.Kind == "video" {
-			videoRefs = append(videoRefs, ref)
-		}
-	}
-	if len(videoRefs) > 0 {
-		ctx = tools.WithMediaVideoRefs(ctx, videoRefs)
-		// Embed media IDs into <media:video> tags so LLM can reference them.
-		l.enrichVideoIDs(messages, mediaRefs)
-	}
-
-	// 2e. Enrich <media:image> tags with persisted media IDs so the LLM
-	// knows images were received and stored (consistent with audio/video enrichment).
-	l.enrichImageIDs(messages, mediaRefs)
-
-	// 2e-ii. In file-ref mode, enrich ALL user messages' image tags with file paths.
-	// This enables read_image(path=...) for both current and historical images.
-	if deferToReadImageTool {
-		l.enrichImagePaths(messages)
-	}
-
-	// 2f. Collect all media file paths for team workspace auto-collect.
-	// When the leader calls team_tasks(create), these paths are copied to the
-	// team workspace so members can access attached files.
-	if len(mediaRefs) > 0 && l.mediaStore != nil {
-		var mediaPaths []string
-		for _, ref := range mediaRefs {
-			// Prefer workspace-local path (.uploads/) over canonical .media/ path.
-			if ref.Path != "" {
-				mediaPaths = append(mediaPaths, ref.Path)
-			} else if p, err := l.mediaStore.LoadPath(ref.ID); err == nil {
-				mediaPaths = append(mediaPaths, p)
-			}
-		}
-		if len(mediaPaths) > 0 {
-			ctx = tools.WithRunMediaPaths(ctx, mediaPaths)
-			// Extract original filenames from <media:document name="X" path="Y"> tags
-			// in the last user message (enriched in step 2b above).
-			if lastMsg := messages[len(messages)-1]; lastMsg.Role == "user" {
-				if nameMap := tools.ExtractMediaNameMap(lastMsg.Content); len(nameMap) > 0 {
-					ctx = tools.WithRunMediaNames(ctx, nameMap)
-				}
-			}
-		}
-	}
-
-	// 2g. Cross-session task reminder: notify team leads about pending and in-progress tasks.
-	// Stale recovery (expired lock → pending) is handled by the background TaskTicker.
-	// Reminders are injected BEFORE the user message so the user's actual message is always
-	// the last message — prevents trailing assistant messages that proxy providers reject.
-	if l.teamStore != nil && l.agentUUID != uuid.Nil {
-		if team, _ := l.teamStore.GetTeamForAgent(ctx, l.agentUUID); team != nil && team.LeadAgentID == l.agentUUID {
-			if tasks, err := l.teamStore.ListTasks(ctx, team.ID, "newest", "active", req.UserID, "", "", 0, 0); err == nil {
-				var stale []string
-				var inProgress []string
-				for _, t := range tasks {
-					if t.Status == store.TeamTaskStatusPending {
-						age := time.Since(t.CreatedAt).Truncate(time.Minute)
-						stale = append(stale, fmt.Sprintf("- %s: \"%s\" (pending %s)", t.ID, t.Subject, age))
-					}
-					if t.Status == store.TeamTaskStatusInProgress {
-						age := time.Since(t.UpdatedAt).Truncate(time.Minute)
-						progressInfo := fmt.Sprintf("in progress %s", age)
-						if t.ProgressPercent > 0 {
-							if t.ProgressStep != "" {
-								progressInfo = fmt.Sprintf("%d%% — %s, %s", t.ProgressPercent, t.ProgressStep, age)
-							} else {
-								progressInfo = fmt.Sprintf("%d%%, %s", t.ProgressPercent, age)
-							}
-						}
-						inProgress = append(inProgress, fmt.Sprintf("- %s: \"%s\" (%s)", t.ID, t.Subject, progressInfo))
-					}
-				}
-				var parts []string
-				if len(stale) > 0 {
-					parts = append(parts, fmt.Sprintf(
-						"You have %d pending team task(s) awaiting dispatch:\n%s\n"+
-							"These tasks will be auto-dispatched to available team members. If no longer needed, cancel with team_tasks action=cancel.",
-						len(stale), strings.Join(stale, "\n")))
-				}
-				if len(inProgress) > 0 {
-					parts = append(parts, fmt.Sprintf(
-						"You have %d in-progress team task(s) being handled by team members:\n%s\n"+
-							"Their results will arrive automatically. Do NOT cancel, re-create, or re-spawn these tasks.",
-						len(inProgress), strings.Join(inProgress, "\n")))
-				}
-				if len(parts) > 0 {
-					reminder := "[System] " + strings.Join(parts, "\n\n")
-					// Pop user message, inject reminder, push user message back
-					userMsg := messages[len(messages)-1]
-					messages = messages[:len(messages)-1]
-					messages = append(messages,
-						providers.Message{Role: "user", Content: reminder},
-						providers.Message{Role: "assistant", Content: "I see the task status. Let me handle accordingly."},
-						userMsg,
-					)
-				}
-			}
-		}
-	}
-
-	// 2h. Member task reminder: inject task context for members working on dispatched tasks.
-	// Caches task subject/number for mid-loop progress nudge (avoids extra DB query).
-	var memberTaskSubject string
-	var memberTaskNumber int
-	if req.TeamTaskID != "" && l.teamStore != nil {
-		if taskUUID, err := uuid.Parse(req.TeamTaskID); err == nil {
-			if task, err := l.teamStore.GetTask(ctx, taskUUID); err == nil && task != nil {
-				memberTaskSubject = task.Subject
-				memberTaskNumber = task.TaskNumber
-				reminder := fmt.Sprintf(
-					"[System] You are working on team task #%d: %q. "+
-						"Stay focused on this task. Your final response becomes the task result — make it clear and complete. "+
-						"For long tasks, report progress: team_tasks(action=\"progress\", percent=50, text=\"status\").",
-					task.TaskNumber, task.Subject)
-				// Pop user message, inject reminder, push user message back
-				userMsg := messages[len(messages)-1]
-				messages = messages[:len(messages)-1]
-				messages = append(messages,
-					providers.Message{Role: "user", Content: reminder},
-					providers.Message{Role: "assistant", Content: "Understood. I'll focus on this task and report progress."},
-					userMsg,
-				)
-			}
-		}
-	}
+	// 2g–2h. Inject leader pending-task reminders and member task context.
+	messages, memberTask := l.injectTeamTaskReminders(ctx, &req, messages)
 
 	// 3. Buffer new messages — write to session only AFTER the run completes.
 	// This prevents concurrent runs from seeing each other's in-progress messages.
@@ -319,8 +120,6 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	rs := &runState{
 		pendingMsgs: initPendingMsgs,
 	}
-
-	// Member progress nudge: remind dispatched members to report progress (every 6 iterations).
 
 	// Inject retry hook so channels can update placeholder on LLM retries.
 	ctx = providers.WithRetryHook(ctx, func(attempt, maxAttempts int, err error) {
@@ -381,7 +180,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 		// Member progress nudge: remind to report progress every 6 iterations.
 		// Suggests percent based on iteration ratio — model can adjust but has a baseline.
-		if req.TeamTaskID != "" && memberTaskSubject != "" && rs.iteration > 0 && rs.iteration%6 == 0 {
+		if req.TeamTaskID != "" && memberTask.Subject != "" && rs.iteration > 0 && rs.iteration%6 == 0 {
 			var nudge string
 			if maxIter > 0 {
 				suggestedPct := rs.iteration * 100 / maxIter
@@ -389,13 +188,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					"[System] You are at iteration %d/%d (~%d%% of budget) working on task #%d: %q. "+
 						"Report your progress now: team_tasks(action=\"progress\", percent=%d, text=\"what you've accomplished so far\"). "+
 						"Adjust percent based on actual work completed.",
-					rs.iteration, maxIter, suggestedPct, memberTaskNumber, memberTaskSubject, suggestedPct)
+					rs.iteration, maxIter, suggestedPct, memberTask.TaskNumber, memberTask.Subject, suggestedPct)
 			} else {
 				nudge = fmt.Sprintf(
 					"[System] You are at iteration %d working on task #%d: %q. "+
 						"Report your progress now: team_tasks(action=\"progress\", percent=50, text=\"what you've accomplished so far\"). "+
 						"Adjust percent based on actual work completed.",
-					rs.iteration, memberTaskNumber, memberTaskSubject)
+					rs.iteration, memberTask.TaskNumber, memberTask.Subject)
 			}
 			messages = append(messages, providers.Message{Role: "user", Content: nudge})
 		}
@@ -423,86 +222,25 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Payload: map[string]any{"phase": "thinking", "iteration": rs.iteration},
 		})
 
-		// Build provider request with policy-filtered tools
+		// Build per-iteration tool list: policy, tenant exclusions, bootstrap, skill visibility,
+		// channel type, and final-iteration stripping.
 		var toolDefs []providers.ToolDefinition
 		var allowedTools map[string]bool
-		if l.toolPolicy != nil {
-			toolDefs = l.toolPolicy.FilterTools(l.tools, l.id, l.provider.Name(), l.agentToolPolicy, req.ToolAllow, false, false)
-			allowedTools = make(map[string]bool, len(toolDefs))
-			for _, td := range toolDefs {
-				allowedTools[td.Function.Name] = true
-			}
-		} else {
-			toolDefs = l.tools.ProviderDefs()
+		// Resolve per-user MCP tools (servers requiring user credentials).
+		// Must run before buildFilteredTools so tools are in the Registry for policy filtering.
+		if req.UserID != "" {
+			l.getUserMCPTools(iterCtx, req.UserID)
 		}
+		toolDefs, allowedTools, messages = l.buildFilteredTools(&req, hadBootstrap, rs.iteration, maxIter, messages)
 
-		// Per-tenant tool exclusions: remove tools disabled for this agent's tenant.
-		if len(l.disabledTools) > 0 {
-			filtered := toolDefs[:0]
-			for _, td := range toolDefs {
-				if !l.disabledTools[td.Function.Name] {
-					filtered = append(filtered, td)
-				} else {
-					delete(allowedTools, td.Function.Name)
-				}
-			}
-			toolDefs = filtered
-		}
-
-		// Bootstrap mode: restrict API tool definitions to write_file only (open agents).
-		// Predefined agents keep all tools — BOOTSTRAP.md guides behavior.
-		if hadBootstrap && l.agentType != store.AgentTypePredefined {
-			var bootstrapDefs []providers.ToolDefinition
-			for _, td := range toolDefs {
-				if bootstrapToolAllowlist[td.Function.Name] {
-					bootstrapDefs = append(bootstrapDefs, td)
-				}
-			}
-			toolDefs = bootstrapDefs
-		}
-
-		// Hide skill_manage from LLM when skill_evolve is off.
-		// Tool stays in the registry (shared) but won't appear in API tool definitions.
-		if !l.skillEvolve {
-			filtered := toolDefs[:0:0]
-			for _, td := range toolDefs {
-				if td.Function.Name != "skill_manage" {
-					filtered = append(filtered, td)
-				}
-			}
-			toolDefs = filtered
-		}
-
-		// Hide channel-specific tools when channel type doesn't match.
-		if req.ChannelType != "" {
-			filtered := toolDefs[:0:0]
-			for _, td := range toolDefs {
-				if tool, ok := l.tools.Get(td.Function.Name); ok {
-					if ca, ok := tool.(tools.ChannelAware); ok {
-						if !slices.Contains(ca.RequiredChannelTypes(), req.ChannelType) {
-							continue
-						}
-					}
-				}
-				filtered = append(filtered, td)
-			}
-			toolDefs = filtered
-		}
-
-		// Final iteration: strip all tools to force a text-only response.
-		// Without this the model may keep requesting tools and exit with "...".
-		if rs.iteration == maxIter {
-			toolDefs = nil
-			messages = append(messages, providers.Message{
-				Role:    "user",
-				Content: "[System] Final iteration reached. Summarize all findings and respond to the user now. No more tool calls allowed.",
-			})
-		}
-
-		// Use per-request model override if set (e.g. heartbeat uses cheaper model).
+		// Use per-request overrides if set (e.g. heartbeat uses cheaper provider/model).
 		model := l.model
+		provider := l.provider
 		if req.ModelOverride != "" {
 			model = req.ModelOverride
+		}
+		if req.ProviderOverride != nil {
+			provider = req.ProviderOverride
 		}
 
 		chatReq := providers.ChatRequest{
@@ -524,20 +262,23 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		if tid := store.TenantIDFromContext(ctx); tid != uuid.Nil {
 			chatReq.Options[providers.OptTenantID] = tid.String()
 		}
-		if l.thinkingLevel != "" && l.thinkingLevel != "off" {
-			if tc, ok := l.provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-				chatReq.Options[providers.OptThinkingLevel] = l.thinkingLevel
-				// For providers with per-model thinking capability (e.g. DashScope),
-				// pre-compute whether this specific model supports thinking and pass it
-				// along so the provider doesn't need to re-derive it.
-				if mc, ok := l.provider.(providers.ModelThinkingCapable); ok {
-					supports := mc.ModelSupportsThinking(l.model)
-					chatReq.ModelSupportsThinking = &supports
-				}
-			} else {
-				slog.Debug("thinking_level ignored: provider does not support thinking",
-					"provider", l.provider.Name(), "level", l.thinkingLevel)
-			}
+		reasoningDecision := providers.ResolveReasoningDecision(
+			provider,
+			model,
+			l.reasoningConfig.Effort,
+			l.reasoningConfig.Fallback,
+			l.reasoningConfig.Source,
+		)
+		if effort := reasoningDecision.RequestEffort(); effort != "" {
+			chatReq.Options[providers.OptThinkingLevel] = effort
+		}
+		if reasoningDecision.Reason != "" {
+			slog.Debug("reasoning normalized",
+				"provider", provider.Name(),
+				"model", model,
+				"requested", reasoningDecision.RequestedEffort,
+				"effective", reasoningDecision.EffectiveEffort,
+				"reason", reasoningDecision.Reason)
 		}
 
 		// Call LLM (streaming or non-streaming)
@@ -545,11 +286,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		var err error
 
 		callCtx := providers.WithChatGPTOAuthRoutingObservation(ctx, providers.NewChatGPTOAuthRoutingObservation())
+		if reasoningDecision.HasObservation() {
+			callCtx = providers.WithReasoningDecision(callCtx, reasoningDecision)
+		}
 		llmSpanStart := time.Now().UTC()
-		llmSpanID := l.emitLLMSpanStart(callCtx, llmSpanStart, rs.iteration, messages)
+		llmSpanID := l.emitLLMSpanStart(callCtx, llmSpanStart, rs.iteration, messages, withModel(model), withProvider(provider.Name()))
 
 		if req.Stream {
-			resp, err = l.provider.ChatStream(callCtx, chatReq, func(chunk providers.StreamChunk) {
+			resp, err = provider.ChatStream(callCtx, chatReq, func(chunk providers.StreamChunk) {
 				if chunk.Thinking != "" {
 					emitRun(AgentEvent{
 						Type:    protocol.ChatEventThinking,
@@ -568,15 +312,15 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				}
 			})
 		} else {
-			resp, err = l.provider.Chat(callCtx, chatReq)
+			resp, err = provider.Chat(callCtx, chatReq)
 		}
 
 		if err != nil {
-			l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, nil, err)
+			l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, nil, err, withModel(model), withProvider(provider.Name()))
 			return nil, fmt.Errorf("LLM call failed (iteration %d): %w", rs.iteration, err)
 		}
 
-		l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, resp, nil)
+		l.emitLLMSpanEnd(callCtx, llmSpanID, llmSpanStart, resp, nil, withModel(model), withProvider(provider.Name()))
 
 		// For non-streaming responses, emit thinking and content as single events
 		if !req.Stream {
@@ -605,24 +349,48 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			rs.totalUsage.ThinkingTokens += resp.Usage.ThinkingTokens
 		}
 
-		// Mid-loop compaction: same threshold as maybeSummarize (contextWindow * historyShare)
-		// but applied to in-memory messages during the run. Prevents context overflow for
-		// long-running agents (e.g. delegated research tasks that accumulate many tool results).
+		// Mid-loop context management: uses history-only token count (excludes overhead
+		// from system prompt, tool definitions, context files) for threshold comparison.
+		// Two-phase approach: prune old tool results first, then compact only if still over budget.
 		if !rs.midLoopCompacted && l.contextWindow > 0 {
 			historyShare := config.DefaultHistoryShare
 			if l.compactionCfg != nil && l.compactionCfg.MaxHistoryShare > 0 {
 				historyShare = l.compactionCfg.MaxHistoryShare
 			}
-			threshold := int(float64(l.contextWindow) * historyShare)
+			historyBudget := int(float64(l.contextWindow) * historyShare)
 
-			promptTokens := 0
-			if resp.Usage != nil && resp.Usage.PromptTokens > 0 {
-				promptTokens = resp.Usage.PromptTokens
-			} else {
-				promptTokens = EstimateTokens(messages)
+			// Calibrate overhead on first LLM response with usage data.
+			if !rs.overheadCalibrated && resp.Usage != nil && resp.Usage.PromptTokens > 0 {
+				historyEst := EstimateHistoryTokens(messages)
+				rs.overheadTokens = max(resp.Usage.PromptTokens-historyEst, 0)
+				rs.overheadCalibrated = true
 			}
 
-			if promptTokens >= threshold {
+			// Compute history-only token count (excludes system prompt/tools overhead).
+			historyTokens := 0
+			if resp.Usage != nil && resp.Usage.PromptTokens > 0 && rs.overheadCalibrated {
+				historyTokens = resp.Usage.PromptTokens - rs.overheadTokens
+			} else {
+				historyTokens = EstimateHistoryTokens(messages)
+			}
+
+			// Phase 1: Prune old tool results before resorting to full compaction (at 70% of budget).
+			// Re-triggers each iteration — new tool results may have grown context since last prune.
+			if historyTokens >= int(float64(historyBudget)*0.7) {
+				pruned := pruneContextMessages(messages, l.contextWindow, l.contextPruningCfg)
+				if len(pruned) > 0 {
+					messages = pruned
+					historyTokens = EstimateHistoryTokens(messages)
+				}
+				slog.Info("mid_loop_pruning",
+					"agent", l.id,
+					"history_tokens", historyTokens,
+					"budget", historyBudget,
+					"overhead", rs.overheadTokens)
+			}
+
+			// Phase 2: Full compaction only if still over budget after pruning.
+			if historyTokens >= historyBudget {
 				rs.midLoopCompacted = true
 				emitRun(AgentEvent{
 					Type:    protocol.AgentEventActivity,
@@ -635,28 +403,51 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				}
 				slog.Info("mid_loop_compaction",
 					"agent", l.id,
-					"prompt_tokens", promptTokens,
-					"threshold", threshold,
+					"history_tokens", historyTokens,
+					"budget", historyBudget,
+					"overhead", rs.overheadTokens,
 					"context_window", l.contextWindow)
 			}
 		}
 
-		// Output truncated (max_tokens hit). Tool call args are likely incomplete.
+		// Output truncated (max_tokens hit) or tool call args malformed.
 		// Inject a system hint so the model can retry with shorter output.
-		if resp.FinishReason == "length" && len(resp.ToolCalls) > 0 {
-			slog.Warn("output truncated (max_tokens), tool calls may have incomplete args",
-				"agent", l.id, "iteration", rs.iteration, "max_tokens", l.effectiveMaxTokens())
+		// Cap consecutive truncation retries to avoid burning through all iterations.
+		truncated := resp.FinishReason == "length" && len(resp.ToolCalls) > 0
+		parseErr := !truncated && hasParseErrors(resp.ToolCalls)
+		if truncated || parseErr {
+			rs.truncationRetries++
+			reason := "output truncated (max_tokens)"
+			if parseErr {
+				reason = "tool call arguments malformed (likely truncated)"
+			}
+			slog.Warn(reason, "agent", l.id, "iteration", rs.iteration,
+				"truncation_retry", rs.truncationRetries, "max_tokens", l.effectiveMaxTokens())
+
+			if rs.truncationRetries >= maxTruncationRetries {
+				slog.Warn("truncation retry limit reached, giving up",
+					"agent", l.id, "retries", rs.truncationRetries)
+				rs.finalContent = resp.Content
+				if rs.finalContent == "" {
+					rs.finalContent = "[Unable to complete: output repeatedly exceeded max_tokens. Try a simpler request or increase the token limit.]"
+				}
+				break
+			}
+
+			hint := "[System] Your output was truncated because it exceeded max_tokens. Your tool call arguments were incomplete. Please retry with shorter content — split large writes into multiple smaller calls, or reduce the amount of text."
+			if parseErr {
+				hint = "[System] One or more tool call arguments were malformed (truncated JSON). This usually means your output was too long. Please retry with shorter content — split large writes into multiple smaller calls."
+			}
 			messages = append(messages,
 				providers.Message{Role: "assistant", Content: resp.Content},
-				providers.Message{
-					Role:    "user",
-					Content: "[System] Your output was truncated because it exceeded max_tokens. Your tool call arguments were incomplete. Please retry with shorter content — split large writes into multiple smaller calls, or reduce the amount of text.",
-				},
+				providers.Message{Role: "user", Content: hint},
 			)
 			continue
 		}
+		// Reset truncation counter on successful tool call (model recovered).
+		rs.truncationRetries = 0
 
-		// No tool calls → done
+		// No tool calls — exit or drain injected follow-ups.
 		if len(resp.ToolCalls) == 0 {
 			// Mid-run injection (Point B): drain all buffered user follow-up messages
 			// before exiting. If found, save current assistant response and continue
@@ -815,16 +606,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			}
 		} else {
 			// Multiple tools: parallel execution via goroutines.
+			// Each goroutine performs lazy MCP activation + policy checking independently.
 			// Tool instances are immutable (context-based) so concurrent access is safe.
 			// Results are collected then processed sequentially for deterministic ordering.
-			type indexedResult struct {
-				idx          int
-				tc           providers.ToolCall
-				registryName string
-				result       *tools.Result
-				argsJSON     string
-				spanStart    time.Time
-			}
 
 			// 1. Emit all tool.call events upfront (client sees all calls starting)
 			for _, tc := range resp.ToolCalls {
@@ -891,10 +675,21 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			// Close channel after all goroutines complete (run in separate goroutine to avoid deadlock)
 			go func() { wg.Wait(); close(resultCh) }()
 
-			// 3. Collect results
+			// 3. Collect results (respect context cancellation to allow /stop)
 			collected := make([]indexedResult, 0, len(resp.ToolCalls))
-			for r := range resultCh {
-				collected = append(collected, r)
+		collectLoop:
+			for range resp.ToolCalls {
+				select {
+				case r, ok := <-resultCh:
+					if !ok {
+						break collectLoop
+					}
+					collected = append(collected, r)
+				case <-ctx.Done():
+					// Trade-off: responsive /stop cancellation skips finalizeRun() cleanup
+					// (bootstrap cleanup, message flush). Stuck agent is worse than lost finalization.
+					return nil, ctx.Err()
+				}
 			}
 
 			// 4. Sort by original index → deterministic message ordering
@@ -904,7 +699,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 			// 5. Process results sequentially: emit events, append messages, save to session
 			// Note: tool span start/end already emitted inside goroutines above.
+			// IMPORTANT: warning messages (role="user") must be deferred until AFTER all
+			// tool results are appended. Inserting a user message between tool results
+			// breaks the Anthropic API requirement that all tool_results for a set of
+			// tool_uses must be consecutive (causes "tool_use ids without tool_result"
+			// errors when routed through LiteLLM OpenAI→Anthropic conversion).
 			var loopStuck bool
+			var deferredWarnings []providers.Message
 			for _, r := range collected {
 				// Record tool execution time for adaptive thresholds.
 				toolTiming.Record(r.tc.Name, time.Since(r.spanStart).Milliseconds())
@@ -913,12 +714,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				toolMsg, warningMsgs, action := l.processToolResult(ctx, rs, &req, emitRun, r.tc, r.registryName, r.result, hadBootstrap)
 				messages = append(messages, toolMsg)
 				rs.pendingMsgs = append(rs.pendingMsgs, toolMsg)
-				messages = append(messages, warningMsgs...)
+				deferredWarnings = append(deferredWarnings, warningMsgs...)
 				if action == toolResultBreak {
 					loopStuck = true
 					break
 				}
 			}
+			// Append deferred warnings after all tool results to preserve consecutive grouping.
+			messages = append(messages, deferredWarnings...)
 
 			// Check read-only streak after processing all parallel results.
 			if !loopStuck {
@@ -971,6 +774,21 @@ func (l *Loop) resolveToolCallName(name string) string {
 		return tools.StripToolPrefix(l.agentToolPolicy.ToolCallPrefix, name)
 	}
 	return name
+}
+
+// maxTruncationRetries caps consecutive truncation/parse-error retries.
+// After this many retries the loop gives up rather than burning all iterations.
+const maxTruncationRetries = 3
+
+// hasParseErrors returns true if any tool call has a non-empty ParseError,
+// indicating the arguments JSON was malformed or truncated by the provider.
+func hasParseErrors(calls []providers.ToolCall) bool {
+	for _, tc := range calls {
+		if tc.ParseError != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func truncateToolArgs(args map[string]any, maxLen int) map[string]any {

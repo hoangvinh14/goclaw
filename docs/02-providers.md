@@ -1,6 +1,6 @@
 # 02 - LLM Providers
 
-GoClaw abstracts LLM communication behind a single `Provider` interface, allowing the agent loop to work with any backend without knowing the wire format. Six concrete implementations exist: Anthropic (native HTTP+SSE), OpenAI-compatible (covering 10+ API endpoints), Claude CLI (local binary), Codex (OAuth-based), ACP (subagent orchestration), and DashScope (Alibaba Qwen with thinking).
+GoClaw abstracts LLM communication behind a single `Provider` interface, allowing the agent loop to work with any backend without knowing the wire format. Six concrete implementations exist: Anthropic (native HTTP+SSE), OpenAI-compatible (covering 10+ API endpoints), Claude CLI (local binary), Codex (OAuth-based), ACP (subagent orchestration), and DashScope (Alibaba Qwen with thinking). The OpenAI-compatible provider also supports BytePlus ModelArk (Seed 2.0 models with image/video generation).
 
 ---
 
@@ -75,6 +75,8 @@ All HTTP-based providers (Anthropic, OpenAI-compatible, Codex) use 300-second ti
 | bailian | `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3.5-plus` | Alibaba Coding API |
 | zai | `https://api.z.ai/api/paas/v4` | `glm-5` | |
 | zai-coding | `https://api.z.ai/api/coding/paas/v4` | `glm-5` | |
+| byteplus | `https://ark.ap-southeast.bytepluses.com/api/v3` | `seed-2-0-lite-260228` | Seed 2.0 models |
+| byteplus_coding | `https://ark.ap-southeast.bytepluses.com/api/coding/v3` | `seed-2-0-lite-260228` | Seed 2.0 Coding Plan |
 
 ---
 
@@ -271,25 +273,25 @@ flowchart LR
 
 ## 8. Extended Thinking
 
-Extended thinking allows LLMs to generate internal reasoning tokens before producing a response, improving quality for complex tasks. GoClaw supports this across multiple providers with a unified `thinking_level` configuration. See [12-extended-thinking.md](./12-extended-thinking.md) for full details.
+Extended thinking allows LLMs to generate internal reasoning tokens before producing a response, improving quality for complex tasks. GoClaw supports this across multiple providers with provider-owned reasoning defaults, agent inherit/custom overrides, and a legacy `thinking_level` shim for rollback compatibility. See [12-extended-thinking.md](./12-extended-thinking.md) for full details.
 
 ### Provider Mapping
 
 ```mermaid
 flowchart TD
-    LEVEL["thinking_level"] --> CHECK{"Provider<br/>supports thinking?"}
+    LEVEL["provider.settings.reasoning_defaults<br/>+ agent other_config.reasoning"] --> CHECK{"Provider<br/>supports thinking?"}
     CHECK -->|No| SKIP["Skip — normal request"]
     CHECK -->|Yes| TYPE{"Provider type?"}
 
     TYPE -->|Anthropic| ANTH["Budget tokens:<br/>low=4K, medium=10K, high=32K<br/>+ anthropic-beta header<br/>+ strip temperature"]
-    TYPE -->|OpenAI-compat| OAI["reasoning_effort:<br/>low / medium / high"]
+    TYPE -->|OpenAI-compat| OAI["capability-aware<br/>reasoning_effort"]
     TYPE -->|DashScope| DASH["enable_thinking: true<br/>Budget: low=4K, medium=16K, high=32K<br/>⚠ No streaming with tools"]
 ```
 
 ### Streaming
 
 - **Anthropic**: `thinking_delta` events accumulate into `StreamChunk.Thinking`
-- **OpenAI-compat**: `reasoning_content` in response delta
+- **OpenAI-compat**: `reasoning_content` in response delta, with GPT-5/Codex effort normalization when the model is known
 - **DashScope**: Falls back to non-streaming when tools are present, synthesizes chunk callbacks
 
 ### Tool Loop Handling
@@ -621,7 +623,7 @@ Codex supports SSE streaming similar to Anthropic:
 
 ### Extended Thinking
 
-Codex provider reports `SupportsThinking() = true`, allowing thinking_level to be injected. The provider maps thinking levels to reasoning_effort parameters as needed.
+Codex provider reports `SupportsThinking() = true`, allowing capability-aware reasoning effort injection. Providers can save reusable `settings.reasoning_defaults`, agents inherit them by default, and custom agent overrides remain additive. For known GPT-5/Codex models, GoClaw resolves requested versus effective effort before the request and records the source and outcome in trace metadata.
 
 ### Token Usage
 
@@ -646,15 +648,31 @@ Provider default example:
 }
 ```
 
+Provider reasoning default example:
+
+```json
+{
+  "name": "openai-codex",
+  "provider_type": "chatgpt_oauth",
+  "settings": {
+    "reasoning_defaults": {
+      "effort": "high",
+      "fallback": "provider_default"
+    }
+  }
+}
+```
+
 Agent override example:
 
 ```json
 {
   "provider": "openai-codex",
   "other_config": {
-    "chatgpt_oauth_routing": {
+    "reasoning": {
       "override_mode": "custom",
-      "strategy": "round_robin"
+      "effort": "xhigh",
+      "fallback": "downgrade"
     }
   }
 }
@@ -673,6 +691,14 @@ Routing behavior:
 - Retryable upstream failures can fall through to the next eligible OpenAI Codex OAuth account in the same request.
 - Explicit provider names remain explicit. OAuth auth/logout is still provider-scoped.
 - Runtime observability for one agent is available at `GET /v1/agents/{id}/codex-pool-activity`, which exposes recent routed traces plus per-alias health derived from those traces.
+
+Reasoning behavior:
+- `settings.reasoning_defaults` is provider-owned and reusable across agents.
+- `reasoning.override_mode: "inherit"` follows the provider default.
+- `reasoning.override_mode: "custom"` stores an agent-local reasoning policy.
+- Existing `reasoning` payloads without `override_mode` still behave as custom overrides.
+- If no provider default is saved, inherit resolves to reasoning `off`.
+- Trace metadata surfaces the reasoning `source` so provider-default behavior is no longer implicit.
 
 ---
 
@@ -712,6 +738,8 @@ Routing behavior:
 | `internal/providers/schema_cleaner.go` | CleanSchemaForProvider, CleanToolSchemas, recursive schema field removal |
 | `internal/providers/registry.go` | Provider registry: registration, lookup, lifecycle management |
 | `cmd/gateway_providers.go` | Provider registration from config and database during gateway startup |
+| `internal/tools/create_image_byteplus.go` | BytePlus Seedream async image generation (async polling) |
+| `internal/tools/create_video_byteplus.go` | BytePlus Seedance async video generation (async polling, 2K resolution) |
 
 ---
 

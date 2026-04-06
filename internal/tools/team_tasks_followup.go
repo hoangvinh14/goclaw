@@ -10,12 +10,7 @@ import (
 )
 
 func (t *TeamTasksTool) executeAskUser(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.ResolveTeam(ctx)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -66,12 +61,7 @@ func (t *TeamTasksTool) executeAskUser(ctx context.Context, args map[string]any)
 }
 
 func (t *TeamTasksTool) executeClearAskUser(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.ResolveTeam(ctx)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -97,16 +87,11 @@ func (t *TeamTasksTool) executeClearAskUser(ctx context.Context, args map[string
 }
 
 func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.ResolveTeam(ctx)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := t.manager.RequireLead(ctx, team, agentID); err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
-	if err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -140,20 +125,14 @@ func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *
 		return ErrorResult("failed to retry task: " + err.Error())
 	}
 
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
-		TeamID:        team.ID.String(),
-		TaskID:        taskID.String(),
-		TaskNumber:    task.TaskNumber,
-		Subject:       task.Subject,
-		Status:        store.TeamTaskStatusInProgress,
-		OwnerAgentKey: t.manager.AgentKeyFromID(ctx, *task.OwnerAgentID),
-		UserID:        store.UserIDFromContext(ctx),
-		Channel:       ToolChannelFromCtx(ctx),
-		ChatID:        ToolChatIDFromCtx(ctx),
-		Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:     "agent",
-		ActorID:       t.manager.AgentKeyFromID(ctx, agentID),
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskDispatched, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusInProgress,
+		"agent", t.manager.AgentKeyFromID(ctx, agentID),
+		WithTaskInfo(task.TaskNumber, task.Subject),
+		WithOwnerAgentKey(t.manager.AgentKeyFromID(ctx, *task.OwnerAgentID)),
+		WithContextInfo(ctx),
+	))
 
 	// Dispatch immediately (retry is an explicit action, not during a turn).
 	t.manager.DispatchTaskToAgent(ctx, task, team, *task.OwnerAgentID)

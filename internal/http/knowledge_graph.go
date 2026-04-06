@@ -42,8 +42,18 @@ func (h *KnowledgeGraphHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/agents/{agentID}/kg/extract", h.auth(h.handleExtract))
 	mux.HandleFunc("GET /v1/agents/{agentID}/kg/stats", h.auth(h.handleStats))
 	mux.HandleFunc("GET /v1/agents/{agentID}/kg/graph", h.auth(h.handleGraph))
+	mux.HandleFunc("POST /v1/agents/{agentID}/kg/dedup/scan", h.auth(h.handleScanDuplicates))
+	mux.HandleFunc("GET /v1/agents/{agentID}/kg/dedup", h.auth(h.handleListDedupCandidates))
+	mux.HandleFunc("POST /v1/agents/{agentID}/kg/merge", h.auth(h.handleMergeEntities))
+	mux.HandleFunc("POST /v1/agents/{agentID}/kg/dedup/dismiss", h.auth(h.handleDismissCandidate))
 }
 
 func (h *KnowledgeGraphHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth("", next)
+	return requireAuth("", func(w http.ResponseWriter, r *http.Request) {
+		// KG management endpoints serve the admin UI — use shared KG context
+		// so queries don't require exact user_id match. Tenant isolation is
+		// still enforced via scopeClause (tenant_id filter).
+		ctx := store.WithSharedKG(r.Context())
+		next(w, r.WithContext(ctx))
+	})
 }

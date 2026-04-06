@@ -15,7 +15,7 @@ import (
 
 // HandleAgentEvent routes agent lifecycle events to streaming/reaction channels.
 // Called from the bus event subscriber — must be non-blocking.
-// eventType: "run.started", "chunk", "tool.call", "tool.result", "run.completed", "run.failed"
+// eventType: "run.started", "chunk", "tool.call", "tool.result", "run.completed", "run.failed", "run.cancelled"
 func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 	val, ok := m.runs.Load(runID)
 	if !ok {
@@ -230,8 +230,8 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 				}
 				sc.FinalizeStream(ctx, rc.ChatID, currentStream)
 			}
-		case protocol.AgentEventRunFailed:
-			// Clean up streaming state on failure
+		case protocol.AgentEventRunFailed, protocol.AgentEventRunCancelled:
+			// Clean up streaming state on failure or cancellation
 			rc.mu.Lock()
 			currentStream := rc.stream
 			rc.stream = nil
@@ -315,6 +315,8 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 			status = "done"
 		case protocol.AgentEventRunFailed:
 			status = "error"
+		case protocol.AgentEventRunCancelled:
+			status = "done"
 		}
 		if status != "" {
 			if err := reactionCh.OnReactionEvent(ctx, rc.ChatID, rc.MessageID, status); err != nil {
@@ -324,7 +326,7 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 	}
 
 	// Clean up on terminal events
-	if eventType == protocol.AgentEventRunCompleted || eventType == protocol.AgentEventRunFailed {
+	if eventType == protocol.AgentEventRunCompleted || eventType == protocol.AgentEventRunFailed || eventType == protocol.AgentEventRunCancelled {
 		m.runs.Delete(runID)
 	}
 }

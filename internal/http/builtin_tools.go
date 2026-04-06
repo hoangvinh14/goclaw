@@ -9,6 +9,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
@@ -29,15 +30,20 @@ func NewBuiltinToolsHandler(s store.BuiltinToolStore, tenantCfgs store.BuiltinTo
 
 // RegisterRoutes registers all built-in tool routes on the given mux.
 func (h *BuiltinToolsHandler) RegisterRoutes(mux *http.ServeMux) {
+	// Builtin tools (reads: viewer+, writes: admin+)
 	mux.HandleFunc("GET /v1/tools/builtin", h.auth(h.handleList))
 	mux.HandleFunc("GET /v1/tools/builtin/{name}", h.auth(h.handleGet))
-	mux.HandleFunc("PUT /v1/tools/builtin/{name}", h.auth(h.handleUpdate))
-	mux.HandleFunc("PUT /v1/tools/builtin/{name}/tenant-config", h.auth(h.handleSetTenantConfig))
-	mux.HandleFunc("DELETE /v1/tools/builtin/{name}/tenant-config", h.auth(h.handleDeleteTenantConfig))
+	mux.HandleFunc("PUT /v1/tools/builtin/{name}", h.adminAuth(h.handleUpdate))
+	mux.HandleFunc("PUT /v1/tools/builtin/{name}/tenant-config", h.adminAuth(h.handleSetTenantConfig))
+	mux.HandleFunc("DELETE /v1/tools/builtin/{name}/tenant-config", h.adminAuth(h.handleDeleteTenantConfig))
 }
 
 func (h *BuiltinToolsHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth("", next)
+}
+
+func (h *BuiltinToolsHandler) adminAuth(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(permissions.RoleAdmin, next)
 }
 
 func (h *BuiltinToolsHandler) emitCacheInvalidate(key string) {

@@ -50,7 +50,8 @@ func NewSQLiteStores(cfg store.StoreConfig) (*store.Stores, error) {
 		Activity:         NewSQLiteActivityStore(db),
 		APIKeys:          NewSQLiteAPIKeyStore(db),
 		ConfigPermissions: NewSQLiteConfigPermissionStore(db),
-		Memory: NewSQLiteMemoryStore(db),
+		Memory:         NewSQLiteMemoryStore(db),
+		SubagentTasks:  NewSQLiteSubagentTaskStore(),
 		// Phase 2 Batch B+C stores (nil = gracefully skipped by gateway):
 		// AgentLinks, KnowledgeGraph, SecureCLI
 	}, nil

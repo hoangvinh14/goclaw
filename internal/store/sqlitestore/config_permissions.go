@@ -21,6 +21,7 @@ type permRow struct {
 	Scope      string
 	ConfigType string
 	Permission string
+	UserID     string
 }
 
 type permCacheEntry struct {
@@ -72,7 +73,7 @@ func (s *SQLiteConfigPermissionStore) CheckPermission(ctx context.Context, agent
 	s.mu.RLock()
 	if entry, ok := s.cache[cacheKey]; ok && time.Since(entry.fetched) < permCacheTTL {
 		s.mu.RUnlock()
-		return evalPermRows(entry.rows, scope, configType), nil
+		return evalPermRows(entry.rows, scope, configType, userID), nil
 	}
 	s.mu.RUnlock()
 
@@ -81,8 +82,8 @@ func (s *SQLiteConfigPermissionStore) CheckPermission(ctx context.Context, agent
 		return false, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT scope, config_type, permission FROM agent_config_permissions
-		 WHERE agent_id = ? AND user_id = ?`+tClause,
+		`SELECT scope, config_type, permission, user_id FROM agent_config_permissions
+		 WHERE agent_id = ? AND (user_id = ? OR user_id = '*')`+tClause,
 		append([]any{agentID, userID}, tArgs...)...,
 	)
 	if err != nil {
@@ -93,7 +94,7 @@ func (s *SQLiteConfigPermissionStore) CheckPermission(ctx context.Context, agent
 	var permRows []permRow
 	for rows.Next() {
 		var r permRow
-		if err := rows.Scan(&r.Scope, &r.ConfigType, &r.Permission); err != nil {
+		if err := rows.Scan(&r.Scope, &r.ConfigType, &r.Permission, &r.UserID); err != nil {
 			return false, err
 		}
 		permRows = append(permRows, r)
@@ -106,7 +107,7 @@ func (s *SQLiteConfigPermissionStore) CheckPermission(ctx context.Context, agent
 	s.cache[cacheKey] = permCacheEntry{rows: permRows, fetched: time.Now()}
 	s.mu.Unlock()
 
-	return evalPermRows(permRows, scope, configType), nil
+	return evalPermRows(permRows, scope, configType, userID), nil
 }
 
 func (s *SQLiteConfigPermissionStore) Grant(ctx context.Context, perm *store.ConfigPermission) error {
@@ -243,24 +244,43 @@ func scanConfigPermissions(rows *sql.Rows) ([]store.ConfigPermission, error) {
 	return perms, nil
 }
 
-// evalPermRows evaluates cached permission rows against scope and configType (deny-first).
-func evalPermRows(rows []permRow, scope, configType string) bool {
-	var hasDeny, hasAllow bool
+// evalPermRows evaluates cached permission rows with priority-based evaluation.
+// Individual permissions (matching targetUserID) override group wildcards (user_id="*").
+func evalPermRows(rows []permRow, scope, configType, targetUserID string) bool {
+	var individualDeny, individualAllow bool
+	var groupDeny, groupAllow bool
+
 	for _, r := range rows {
 		if !matchWildcard(r.Scope, scope) || !matchWildcard(r.ConfigType, configType) {
 			continue
 		}
-		switch r.Permission {
-		case "deny":
-			hasDeny = true
-		case "allow":
-			hasAllow = true
+		if r.UserID == targetUserID {
+			switch r.Permission {
+			case "deny":
+				individualDeny = true
+			case "allow":
+				individualAllow = true
+			}
+		} else if r.UserID == "*" {
+			switch r.Permission {
+			case "deny":
+				groupDeny = true
+			case "allow":
+				groupAllow = true
+			}
 		}
 	}
-	if hasDeny {
+
+	if individualDeny {
 		return false
 	}
-	return hasAllow
+	if individualAllow {
+		return true
+	}
+	if groupDeny {
+		return false
+	}
+	return groupAllow
 }
 
 // matchWildcard performs simple wildcard matching for scope/config_type.

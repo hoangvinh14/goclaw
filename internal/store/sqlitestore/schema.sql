@@ -449,6 +449,11 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     timezone         VARCHAR(50),
     payload          TEXT NOT NULL,
     delete_after_run BOOLEAN NOT NULL DEFAULT 0,
+    stateless        INTEGER NOT NULL DEFAULT 0,
+    deliver          INTEGER NOT NULL DEFAULT 0,
+    deliver_channel  TEXT NOT NULL DEFAULT '',
+    deliver_to       TEXT NOT NULL DEFAULT '',
+    wake_heartbeat   INTEGER NOT NULL DEFAULT 0,
     next_run_at      TEXT,
     last_run_at      TEXT,
     last_status      VARCHAR(20),
@@ -1036,6 +1041,9 @@ CREATE TABLE IF NOT EXISTS channel_contacts (
     username         VARCHAR(255),
     avatar_url       TEXT,
     peer_kind        VARCHAR(20),
+    contact_type     VARCHAR(20) NOT NULL DEFAULT 'user',
+    thread_id        VARCHAR(100),
+    thread_type      VARCHAR(20),
     metadata         TEXT DEFAULT '{}',
     merged_id        TEXT,
     tenant_id        TEXT NOT NULL REFERENCES tenants(id),
@@ -1043,8 +1051,8 @@ CREATE TABLE IF NOT EXISTS channel_contacts (
     last_seen_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- tenant-scoped unique (migration 27 Phase I)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_contacts_tenant_type_sender ON channel_contacts(tenant_id, channel_type, sender_id);
+-- tenant-scoped unique including thread_id for topic contacts (migration 35)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_contacts_tenant_type_sender ON channel_contacts(tenant_id, channel_type, sender_id, COALESCE(thread_id, ''));
 CREATE INDEX IF NOT EXISTS idx_channel_contacts_instance ON channel_contacts(channel_instance) WHERE channel_instance IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_channel_contacts_merged ON channel_contacts(merged_id) WHERE merged_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_channel_contacts_search ON channel_contacts(display_name, username);
@@ -1167,7 +1175,7 @@ CREATE TABLE IF NOT EXISTS secure_cli_binaries (
     deny_verbose    TEXT NOT NULL DEFAULT '[]',
     timeout_seconds INTEGER NOT NULL DEFAULT 30,
     tips            TEXT NOT NULL DEFAULT '',
-    agent_id        TEXT REFERENCES agents(id) ON DELETE CASCADE,
+    is_global       BOOLEAN NOT NULL DEFAULT 1,
     enabled         BOOLEAN NOT NULL DEFAULT 1,
     created_by      TEXT NOT NULL DEFAULT '',
     tenant_id       TEXT NOT NULL REFERENCES tenants(id),
@@ -1176,10 +1184,31 @@ CREATE TABLE IF NOT EXISTS secure_cli_binaries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_secure_cli_binary_name ON secure_cli_binaries(binary_name);
-CREATE INDEX IF NOT EXISTS idx_secure_cli_agent_id ON secure_cli_binaries(agent_id) WHERE agent_id IS NOT NULL;
--- COALESCE(agent_id, '') simulates the PG COALESCE(agent_id, null-sentinel) unique constraint
-CREATE UNIQUE INDEX IF NOT EXISTS idx_secure_cli_unique_binary_agent ON secure_cli_binaries(binary_name, COALESCE(agent_id, ''));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secure_cli_unique_binary_tenant ON secure_cli_binaries(binary_name, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_secure_cli_binaries_tenant ON secure_cli_binaries(tenant_id);
+
+-- ============================================================
+-- Table: secure_cli_agent_grants
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS secure_cli_agent_grants (
+    id              TEXT NOT NULL PRIMARY KEY,
+    binary_id       TEXT NOT NULL REFERENCES secure_cli_binaries(id) ON DELETE CASCADE,
+    agent_id        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    deny_args       TEXT,
+    deny_verbose    TEXT,
+    timeout_seconds INTEGER,
+    tips            TEXT,
+    enabled         BOOLEAN NOT NULL DEFAULT 1,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(binary_id, agent_id, tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scag_binary ON secure_cli_agent_grants(binary_id);
+CREATE INDEX IF NOT EXISTS idx_scag_agent ON secure_cli_agent_grants(agent_id);
+CREATE INDEX IF NOT EXISTS idx_scag_tenant ON secure_cli_agent_grants(tenant_id);
 
 -- ============================================================
 -- Table: api_keys
@@ -1305,3 +1334,38 @@ CREATE TABLE IF NOT EXISTS system_configs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_system_configs_tenant ON system_configs(tenant_id);
+
+-- ============================================================
+-- Table: subagent_tasks
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS subagent_tasks (
+    id                TEXT PRIMARY KEY,
+    tenant_id         TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    parent_agent_key  VARCHAR(255) NOT NULL,
+    session_key       VARCHAR(500),
+    subject           VARCHAR(255) NOT NULL,
+    description       TEXT NOT NULL,
+    status            VARCHAR(20) NOT NULL DEFAULT 'running',
+    result            TEXT,
+    depth             INTEGER NOT NULL DEFAULT 1,
+    model             VARCHAR(255),
+    provider          VARCHAR(255),
+    iterations        INTEGER NOT NULL DEFAULT 0,
+    input_tokens      INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL DEFAULT 0,
+    origin_channel    VARCHAR(50),
+    origin_chat_id    VARCHAR(255),
+    origin_peer_kind  VARCHAR(20),
+    origin_user_id    VARCHAR(255),
+    spawned_by        TEXT,
+    completed_at      TEXT,
+    archived_at       TEXT,
+    metadata          TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_subagent_tasks_parent_status ON subagent_tasks(tenant_id, parent_agent_key, status);
+CREATE INDEX IF NOT EXISTS idx_subagent_tasks_session ON subagent_tasks(session_key);
+CREATE INDEX IF NOT EXISTS idx_subagent_tasks_created ON subagent_tasks(tenant_id, created_at);

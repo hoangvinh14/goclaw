@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +25,7 @@ func (s *PGAgentStore) GetAgentContextFiles(ctx context.Context, agentID uuid.UU
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT agent_id, file_name, content FROM agent_context_files WHERE agent_id = $1"+tClause,
+		"SELECT agent_id, file_name, content FROM agent_context_files WHERE agent_id = $1"+tClause+" ORDER BY file_name",
 		append([]any{agentID}, tArgs...)...)
 	if err != nil {
 		return nil, err
@@ -84,7 +87,7 @@ func (s *PGAgentStore) GetUserContextFiles(ctx context.Context, agentID uuid.UUI
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT agent_id, user_id, file_name, content FROM user_context_files WHERE agent_id = $1 AND user_id = $2"+tClause,
+		"SELECT agent_id, user_id, file_name, content FROM user_context_files WHERE agent_id = $1 AND user_id = $2"+tClause+" ORDER BY file_name",
 		append([]any{agentID, userID}, tArgs...)...)
 	if err != nil {
 		return nil, err
@@ -112,6 +115,30 @@ func (s *PGAgentStore) SetUserContextFile(ctx context.Context, agentID uuid.UUID
 	return err
 }
 
+func (s *PGAgentStore) ListUserContextFilesByName(ctx context.Context, agentID uuid.UUID, fileName string) ([]store.UserContextFileData, error) {
+	tClause, tArgs, _, err := scopeClause(ctx, 3)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT agent_id, user_id, file_name, content FROM user_context_files WHERE agent_id = $1 AND file_name = $2"+tClause,
+		append([]any{agentID, fileName}, tArgs...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []store.UserContextFileData
+	for rows.Next() {
+		var d store.UserContextFileData
+		if err := rows.Scan(&d.AgentID, &d.UserID, &d.FileName, &d.Content); err != nil {
+			continue
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
 func (s *PGAgentStore) DeleteUserContextFile(ctx context.Context, agentID uuid.UUID, userID, fileName string) error {
 	tClause, tArgs, _, err := scopeClause(ctx, 4)
 	if err != nil {
@@ -121,6 +148,89 @@ func (s *PGAgentStore) DeleteUserContextFile(ctx context.Context, agentID uuid.U
 		"DELETE FROM user_context_files WHERE agent_id = $1 AND user_id = $2 AND file_name = $3"+tClause,
 		append([]any{agentID, userID, fileName}, tArgs...)...)
 	return err
+}
+
+func (s *PGAgentStore) MigrateUserDataOnMerge(ctx context.Context, oldUserIDs []string, newUserID string) error {
+	if len(oldUserIDs) == 0 {
+		return nil
+	}
+	tClause, tArgs, _, err := scopeClause(ctx, len(oldUserIDs)+2)
+	if err != nil {
+		return err
+	}
+
+	placeholders := make([]string, len(oldUserIDs))
+	baseArgs := make([]any, 0, len(oldUserIDs)+1+len(tArgs))
+	for i, id := range oldUserIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		baseArgs = append(baseArgs, id)
+	}
+	inClause := strings.Join(placeholders, ",")
+	newP := fmt.Sprintf("$%d", len(oldUserIDs)+1)
+	baseArgs = append(baseArgs, newUserID)
+	baseArgs = append(baseArgs, tArgs...)
+
+	// Args for delete (no newUserID param needed).
+	delArgs := make([]any, len(oldUserIDs))
+	copy(delArgs, baseArgs[:len(oldUserIDs)])
+	delArgs = append(delArgs, tArgs...)
+
+	// Helper: migrate + delete for one table. DO NOTHING on conflict —
+	// existing tenant user data always wins (canonical identity).
+	migrate := func(insertQ, deleteQ string) {
+		if _, err := s.db.ExecContext(ctx, insertQ, baseArgs...); err != nil {
+			slog.Warn("merge.migrate", "error", err)
+		}
+		if _, err := s.db.ExecContext(ctx, deleteQ, delArgs...); err != nil {
+			slog.Warn("merge.cleanup", "error", err)
+		}
+	}
+
+	// 1. user_context_files: UNIQUE(agent_id, user_id, file_name)
+	migrate(
+		fmt.Sprintf(`INSERT INTO user_context_files (id, agent_id, user_id, file_name, content, updated_at, tenant_id)
+			SELECT gen_random_uuid(), agent_id, %s, file_name, content, updated_at, tenant_id
+			FROM user_context_files WHERE user_id IN (%s)%s
+			ON CONFLICT (agent_id, user_id, file_name) DO NOTHING`, newP, inClause, tClause),
+		fmt.Sprintf(`DELETE FROM user_context_files WHERE user_id IN (%s)%s`, inClause, tClause),
+	)
+
+	// 2. user_agent_overrides: UNIQUE(agent_id, user_id)
+	migrate(
+		fmt.Sprintf(`INSERT INTO user_agent_overrides (id, agent_id, user_id, provider, model, settings, created_at, updated_at, tenant_id)
+			SELECT gen_random_uuid(), agent_id, %s, provider, model, settings, created_at, updated_at, tenant_id
+			FROM user_agent_overrides WHERE user_id IN (%s)%s
+			ON CONFLICT (agent_id, user_id) DO NOTHING`, newP, inClause, tClause),
+		fmt.Sprintf(`DELETE FROM user_agent_overrides WHERE user_id IN (%s)%s`, inClause, tClause),
+	)
+
+	// 3. user_agent_profiles: PK(agent_id, user_id)
+	migrate(
+		fmt.Sprintf(`INSERT INTO user_agent_profiles (agent_id, user_id, workspace, first_seen_at, last_seen_at, metadata, tenant_id)
+			SELECT agent_id, %s, workspace, first_seen_at, last_seen_at, metadata, tenant_id
+			FROM user_agent_profiles WHERE user_id IN (%s)%s
+			ON CONFLICT (agent_id, user_id) DO NOTHING`, newP, inClause, tClause),
+		fmt.Sprintf(`DELETE FROM user_agent_profiles WHERE user_id IN (%s)%s`, inClause, tClause),
+	)
+
+	// 4. memory_documents: UNIQUE(agent_id, COALESCE(user_id,''), path)
+	migrate(
+		fmt.Sprintf(`INSERT INTO memory_documents (id, agent_id, user_id, path, content, hash, updated_at, created_at, tenant_id)
+			SELECT gen_random_uuid(), agent_id, %s, path, content, hash, updated_at, created_at, tenant_id
+			FROM memory_documents WHERE user_id IN (%s)%s
+			ON CONFLICT (agent_id, COALESCE(user_id,''), path) DO NOTHING`, newP, inClause, tClause),
+		fmt.Sprintf(`DELETE FROM memory_documents WHERE user_id IN (%s)%s`, inClause, tClause),
+	)
+
+	// 5. memory_chunks: FK on document_id — cascade from memory_documents delete handles this.
+	// But orphan chunks (where document was already migrated) need cleanup.
+	// Simply re-point remaining chunks whose document still has old user_id.
+	repoint := fmt.Sprintf(`UPDATE memory_chunks SET user_id = %s WHERE user_id IN (%s)%s`, newP, inClause, tClause)
+	if _, err := s.db.ExecContext(ctx, repoint, baseArgs...); err != nil {
+		slog.Warn("merge.migrate_chunks", "error", err)
+	}
+
+	return nil
 }
 
 // --- User-Agent Profiles ---

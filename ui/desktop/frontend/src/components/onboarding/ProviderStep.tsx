@@ -38,7 +38,7 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
 
   const handleSubmit = async () => {
     if (!isEditing && needsKey && !apiKey.trim()) {
-      setError('API key is required')
+      setError(t('common:apiKeyRequired'))
       return
     }
     setLoading(true)
@@ -75,7 +75,7 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create provider')
+      setError(err instanceof Error ? err.message : t('common:failedToCreateProvider'))
     } finally {
       setLoading(false)
     }
@@ -84,26 +84,26 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
   return (
     <div className="bg-surface-secondary border border-border rounded-xl p-6 space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-text-primary">Configure Provider</h2>
-        <p className="text-sm text-text-muted">Select an AI provider and enter your credentials.</p>
+        <h2 className="text-lg font-semibold text-text-primary">{t('desktop:onboarding.providerStep')}</h2>
+        <p className="text-sm text-text-muted">{t('desktop:onboarding.providerStepDesc')}</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {/* Provider type select */}
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-text-secondary">Provider Type</label>
+          <label className="block text-sm font-medium text-text-secondary">{t('common:providerType')}</label>
           <Combobox
             value={providerType}
             onChange={handleTypeChange}
             options={PROVIDER_TYPES.map((t) => ({ value: t.value, label: t.label }))}
-            placeholder="Search providers..."
+            placeholder={t('common:searchProviders')}
             allowCustom={false}
           />
         </div>
 
         {/* Name (slug) */}
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-text-secondary">Name</label>
+          <label className="block text-sm font-medium text-text-secondary">{t('common:name')}</label>
           <input
             type="text"
             value={name}
@@ -116,7 +116,7 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
       {/* API Key */}
       {needsKey && (
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-text-secondary">API Key</label>
+          <label className="block text-sm font-medium text-text-secondary">{t('common:apiKey')}</label>
           <input
             type="password"
             value={apiKey}
@@ -130,7 +130,7 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
       {/* API Base */}
       {needsKey && (
         <div className="space-y-1.5">
-          <label className="block text-sm font-medium text-text-secondary">API Base URL</label>
+          <label className="block text-sm font-medium text-text-secondary">{t('common:apiBaseUrl')}</label>
           <input
             type="text"
             value={apiBase}
@@ -142,7 +142,7 @@ export function ProviderStep({ existingProvider, onComplete }: ProviderStepProps
       )}
 
       {!needsKey && (
-        <p className="text-sm text-text-muted">No API key required for {preset?.label}.</p>
+        <p className="text-sm text-text-muted">{t('common:noApiKeyRequired', { provider: preset?.label })}</p>
       )}
 
       {error && <p className="text-sm text-error">{error}</p>}

@@ -46,8 +46,8 @@ func (m *mockMemoryStore) ListDocuments(_ context.Context, agentID, userID strin
 	var out []store.DocumentInfo
 	prefix := agentID + "|" + userID + "|"
 	for k := range m.docs {
-		if strings.HasPrefix(k, prefix) {
-			path := strings.TrimPrefix(k, prefix)
+		if after, ok := strings.CutPrefix(k, prefix); ok {
+			path := after
 			out = append(out, store.DocumentInfo{Path: path})
 		}
 	}
@@ -72,7 +72,7 @@ func (m *mockMemoryStore) Search(_ context.Context, _ string, _, _ string, _ sto
 }
 func (m *mockMemoryStore) IndexDocument(_ context.Context, _, _, _ string) error { return nil }
 func (m *mockMemoryStore) IndexAll(_ context.Context, _, _ string) error         { return nil }
-func (m *mockMemoryStore) SetEmbeddingProvider(_ store.EmbeddingProvider)         {}
+func (m *mockMemoryStore) SetEmbeddingProvider(_ store.EmbeddingProvider)        {}
 func (m *mockMemoryStore) Close() error                                          { return nil }
 
 // --- Test helpers ---

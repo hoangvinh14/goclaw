@@ -316,6 +316,15 @@ func enrichContext(ctx context.Context, r *http.Request, auth authResult) contex
 	ctx = store.WithLocale(ctx, extractLocale(r))
 	ctx = store.WithRole(ctx, string(auth.Role))
 	userID := extractUserID(r)
+	// Security: In dev mode (no gateway token configured), do not trust the
+	// X-GoClaw-User-Id header — force "system" to prevent identity spoofing.
+	if pkgGatewayToken == "" && auth.KeyData == nil && userID != "" {
+		slog.Warn("security.user_id_header_ignored_no_auth",
+			"attempted_user_id", userID,
+			"ip", r.RemoteAddr,
+		)
+		userID = "system"
+	}
 	// If the API key has a bound owner, force user_id to owner regardless of header.
 	if auth.KeyData != nil && auth.KeyData.OwnerID != "" {
 		if userID != "" && userID != auth.KeyData.OwnerID {
@@ -367,7 +376,7 @@ func requireAuth(minRole permissions.Role, next http.HandlerFunc) http.HandlerFu
 
 		if !permissions.HasMinRole(auth.Role, required) {
 			writeJSON(w, http.StatusForbidden, map[string]string{
-				"error": i18n.T(locale, i18n.MsgPermissionDenied, r.URL.Path),
+				"error": i18n.T(locale, i18n.MsgPermissionDenied, r.URL.Path+" requires "+string(required)+" role"),
 			})
 			return
 		}
@@ -398,7 +407,7 @@ func requireAuthBearer(minRole permissions.Role, bearer string, w http.ResponseW
 
 	if !permissions.HasMinRole(auth.Role, required) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": i18n.T(locale, i18n.MsgPermissionDenied, r.URL.Path),
+			"error": i18n.T(locale, i18n.MsgPermissionDenied, r.URL.Path+" requires "+string(required)+" role"),
 		})
 		return r, false
 	}

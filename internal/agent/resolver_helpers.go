@@ -86,7 +86,7 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 		sb.WriteString("- **Create ALL tasks upfront** in one batch, then announce — then STOP. Do NOT create one task, wait for it to finish, then create the next\n")
 		sb.WriteString("- Delegation is NOT completion — do NOT say \"done\"/\"xong\"/\"finished\" after delegating. Only report completion when ALL task results have been delivered\n")
 		sb.WriteString("- Results arrive automatically — do NOT present partial results\n")
-		sb.WriteString("- **Prefer delegation** — delegate tasks to members, do NOT do the work yourself. If you need research, create a research task. If you need code, create a coding task. Only use tools like web_search yourself for quick clarifications needed to plan tasks (e.g., checking a member's capability), NOT for producing deliverables\n")
+		sb.WriteString("- **Delegate complex work** — tasks requiring member expertise, multiple steps, or parallel execution should use team_tasks. Handle simple requests yourself (greetings, clarifications, lookups, translations, single-tool calls). If you can answer in one response with a single tool call, do it yourself. If it requires sustained work, multiple skills, or member expertise → delegate\n")
 		sb.WriteString("- **Do NOT block on completed tasks** — pass completed task's result in the description instead of using blocked_by\n")
 
 		sb.WriteString("\n## Task Planning\n\n")

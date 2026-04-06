@@ -4,19 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 func (t *TeamTasksTool) executeClaim(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.ResolveTeam(ctx)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -28,34 +22,23 @@ func (t *TeamTasksTool) executeClaim(ctx context.Context, args map[string]any) *
 	recordTaskAction(ctx, func(f *TaskActionFlags) { f.Claimed = true })
 
 	ownerKey := t.manager.AgentKeyFromID(ctx, agentID)
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskClaimed, protocol.TeamTaskEventPayload{
-		TeamID:           team.ID.String(),
-		TaskID:           taskID.String(),
-		Status:           store.TeamTaskStatusInProgress,
-		OwnerAgentKey:    ownerKey,
-		OwnerDisplayName: t.manager.AgentDisplayName(ctx, ownerKey),
-		UserID:           store.UserIDFromContext(ctx),
-		Channel:          ToolChannelFromCtx(ctx),
-		ChatID:           ToolChatIDFromCtx(ctx),
-		Timestamp:        time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:        "agent",
-		ActorID:          ownerKey,
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskClaimed, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusInProgress,
+		"agent", ownerKey,
+		WithOwner(ownerKey, t.manager.AgentDisplayName(ctx, ownerKey)),
+		WithContextInfo(ctx),
+	))
 
 	return NewResult(fmt.Sprintf("Task %s claimed successfully. It is now in progress.", taskID))
 }
 
 func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]any) *Result {
-	// Note: reviewer role exists but is not yet active in UI.
-	// All approval flows through leader. When reviewer role is enabled,
-	// restrict teammate agents from completing tasks directly.
+	// Note: reviewer role exists — when task has a reviewer, executeComplete
+	// routes to in_review status instead of completed. Leader still approves.
+	// Member agents always call this; leader bypasses via direct status update.
 
-	team, agentID, err := t.manager.ResolveTeam(ctx)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -109,21 +92,14 @@ func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]any
 		taskNumber = completedTask.TaskNumber
 		taskSubject = completedTask.Subject
 	}
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskCompleted, protocol.TeamTaskEventPayload{
-		TeamID:           team.ID.String(),
-		TaskID:           taskID.String(),
-		TaskNumber:       taskNumber,
-		Subject:          taskSubject,
-		Status:           store.TeamTaskStatusCompleted,
-		OwnerAgentKey:    ownerKey,
-		OwnerDisplayName: t.manager.AgentDisplayName(ctx, ownerKey),
-		UserID:           store.UserIDFromContext(ctx),
-		Channel:          ToolChannelFromCtx(ctx),
-		ChatID:           ToolChatIDFromCtx(ctx),
-		Timestamp:        time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:        "agent",
-		ActorID:          ownerKey,
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskCompleted, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusCompleted,
+		"agent", ownerKey,
+		WithTaskInfo(taskNumber, taskSubject),
+		WithOwner(ownerKey, t.manager.AgentDisplayName(ctx, ownerKey)),
+		WithContextInfo(ctx),
+	))
 
 	// Dependent tasks are dispatched by the consumer after this agent's turn ends
 	// (post-turn), not mid-turn. This prevents dependent tasks from completing and
@@ -135,16 +111,11 @@ func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]any
 func (t *TeamTasksTool) executeCancel(ctx context.Context, args map[string]any) *Result {
 	// Note: reviewer role not yet active. Cancellation goes through leader only.
 
-	team, agentID, err := t.manager.ResolveTeam(ctx)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	if err := t.manager.RequireLead(ctx, team, agentID); err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
-	if err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -158,18 +129,13 @@ func (t *TeamTasksTool) executeCancel(ctx context.Context, args map[string]any) 
 		return ErrorResult("failed to cancel task: " + err.Error())
 	}
 
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskCancelled, protocol.TeamTaskEventPayload{
-		TeamID:    team.ID.String(),
-		TaskID:    taskID.String(),
-		Status:    store.TeamTaskStatusCancelled,
-		Reason:    reason,
-		UserID:    store.UserIDFromContext(ctx),
-		Channel:   ToolChannelFromCtx(ctx),
-		ChatID:    ToolChatIDFromCtx(ctx),
-		Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType: "agent",
-		ActorID:   t.manager.AgentKeyFromID(ctx, agentID),
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskCancelled, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusCancelled,
+		"agent", t.manager.AgentKeyFromID(ctx, agentID),
+		WithReason(reason),
+		WithContextInfo(ctx),
+	))
 
 	// Dependent tasks are dispatched by the consumer after this agent's turn ends (post-turn).
 
@@ -177,12 +143,7 @@ func (t *TeamTasksTool) executeCancel(ctx context.Context, args map[string]any) 
 }
 
 func (t *TeamTasksTool) executeReview(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.ResolveTeam(ctx)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -206,19 +167,13 @@ func (t *TeamTasksTool) executeReview(ctx context.Context, args map[string]any) 
 	recordTaskAction(ctx, func(f *TaskActionFlags) { f.Reviewed = true })
 
 	ownerKey := t.manager.AgentKeyFromID(ctx, agentID)
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskReviewed, protocol.TeamTaskEventPayload{
-		TeamID:           team.ID.String(),
-		TaskID:           taskID.String(),
-		Status:           store.TeamTaskStatusInReview,
-		OwnerAgentKey:    ownerKey,
-		OwnerDisplayName: t.manager.AgentDisplayName(ctx, ownerKey),
-		UserID:           store.UserIDFromContext(ctx),
-		Channel:          ToolChannelFromCtx(ctx),
-		ChatID:           ToolChatIDFromCtx(ctx),
-		Timestamp:        time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:        "agent",
-		ActorID:          ownerKey,
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskReviewed, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusInReview,
+		"agent", ownerKey,
+		WithOwner(ownerKey, t.manager.AgentDisplayName(ctx, ownerKey)),
+		WithContextInfo(ctx),
+	))
 
 	return NewResult(fmt.Sprintf("Task %s submitted for review.", taskID))
 }
@@ -226,7 +181,7 @@ func (t *TeamTasksTool) executeReview(ctx context.Context, args map[string]any) 
 func (t *TeamTasksTool) executeApprove(ctx context.Context, args map[string]any) *Result {
 	// Note: reviewer role not yet active. All approvals flow through leader or dashboard.
 
-	team, agentID, err := t.manager.ResolveTeam(ctx)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -238,11 +193,6 @@ func (t *TeamTasksTool) executeApprove(ctx context.Context, args map[string]any)
 		if err := t.manager.RequireLead(ctx, team, agentID); err != nil {
 			return ErrorResult(err.Error())
 		}
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
-	if err != nil {
-		return ErrorResult(err.Error())
 	}
 
 	// Fetch task for subject (used in lead message) and team ownership check
@@ -266,18 +216,13 @@ func (t *TeamTasksTool) executeApprove(ctx context.Context, args map[string]any)
 		newStatus = approved.Status
 	}
 
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskApproved, protocol.TeamTaskEventPayload{
-		TeamID:    team.ID.String(),
-		TaskID:    taskID.String(),
-		Subject:   task.Subject,
-		Status:    newStatus,
-		UserID:    store.UserIDFromContext(ctx),
-		Channel:   ToolChannelFromCtx(ctx),
-		ChatID:    ToolChatIDFromCtx(ctx),
-		Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType: "agent",
-		ActorID:   t.manager.AgentKeyFromID(ctx, agentID),
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskApproved, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		newStatus,
+		"agent", t.manager.AgentKeyFromID(ctx, agentID),
+		WithSubject(task.Subject),
+		WithContextInfo(ctx),
+	))
 
 	// Record approval as a task comment for audit trail.
 	approveMsg := fmt.Sprintf("Task approved (status: %s).", newStatus)
@@ -293,7 +238,7 @@ func (t *TeamTasksTool) executeApprove(ctx context.Context, args map[string]any)
 func (t *TeamTasksTool) executeReject(ctx context.Context, args map[string]any) *Result {
 	// Note: reviewer role not yet active. Rejections flow through leader or dashboard.
 
-	team, agentID, err := t.manager.ResolveTeam(ctx)
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -304,11 +249,6 @@ func (t *TeamTasksTool) executeReject(ctx context.Context, args map[string]any) 
 		if err := t.manager.RequireLead(ctx, team, agentID); err != nil {
 			return ErrorResult(err.Error())
 		}
-	}
-
-	taskID, err := resolveTaskID(ctx, args)
-	if err != nil {
-		return ErrorResult(err.Error())
 	}
 
 	reason, _ := args["text"].(string)
@@ -344,38 +284,28 @@ func (t *TeamTasksTool) executeReject(ctx context.Context, args map[string]any) 
 			if err := t.manager.Store().RejectTask(ctx, taskID, team.ID, reason); err != nil {
 				return ErrorResult("failed to reject task: " + err.Error())
 			}
-			t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, protocol.TeamTaskEventPayload{
-				TeamID:    team.ID.String(),
-				TaskID:    taskID.String(),
-				Subject:   task.Subject,
-				Status:    store.TeamTaskStatusCancelled,
-				Reason:    reason,
-				UserID:    store.UserIDFromContext(ctx),
-				Channel:   ToolChannelFromCtx(ctx),
-				ChatID:    ToolChatIDFromCtx(ctx),
-				Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-				ActorType: "agent",
-				ActorID:   t.manager.AgentKeyFromID(ctx, agentID),
-			})
+			t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, BuildTaskEventPayload(
+				team.ID.String(), taskID.String(),
+				store.TeamTaskStatusCancelled,
+				"agent", t.manager.AgentKeyFromID(ctx, agentID),
+				WithSubject(task.Subject),
+				WithReason(reason),
+				WithContextInfo(ctx),
+			))
 			return NewResult(fmt.Sprintf("Task %s rejected (cancelled). Use retry to re-dispatch manually.", taskID))
 		}
 		if err := t.manager.Store().AssignTask(ctx, taskID, *task.OwnerAgentID, team.ID); err != nil {
 			slog.Warn("reject: assign task failed", "task_id", taskID, "error", err)
 			return NewResult(fmt.Sprintf("Task %s rejected but could not assign. Use retry to re-dispatch manually.", taskID))
 		}
-		t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, protocol.TeamTaskEventPayload{
-			TeamID:    team.ID.String(),
-			TaskID:    taskID.String(),
-			Subject:   task.Subject,
-			Status:    store.TeamTaskStatusInProgress,
-			Reason:    reason,
-			UserID:    store.UserIDFromContext(ctx),
-			Channel:   ToolChannelFromCtx(ctx),
-			ChatID:    ToolChatIDFromCtx(ctx),
-			Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-			ActorType: "agent",
-			ActorID:   t.manager.AgentKeyFromID(ctx, agentID),
-		})
+		t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, BuildTaskEventPayload(
+			team.ID.String(), taskID.String(),
+			store.TeamTaskStatusInProgress,
+			"agent", t.manager.AgentKeyFromID(ctx, agentID),
+			WithSubject(task.Subject),
+			WithReason(reason),
+			WithContextInfo(ctx),
+		))
 		t.manager.DispatchTaskToAgent(ctx, task, team, *task.OwnerAgentID)
 		return NewResult(fmt.Sprintf("Task %s rejected and re-dispatched to %s with feedback.",
 			taskID, t.manager.AgentKeyFromID(ctx, *task.OwnerAgentID)))
@@ -385,18 +315,13 @@ func (t *TeamTasksTool) executeReject(ctx context.Context, args map[string]any) 
 	if err := t.manager.Store().RejectTask(ctx, taskID, team.ID, reason); err != nil {
 		return ErrorResult("failed to reject task: " + err.Error())
 	}
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, protocol.TeamTaskEventPayload{
-		TeamID:    team.ID.String(),
-		TaskID:    taskID.String(),
-		Subject:   task.Subject,
-		Status:    store.TeamTaskStatusCancelled,
-		Reason:    reason,
-		UserID:    store.UserIDFromContext(ctx),
-		Channel:   ToolChannelFromCtx(ctx),
-		ChatID:    ToolChatIDFromCtx(ctx),
-		Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType: "agent",
-		ActorID:   t.manager.AgentKeyFromID(ctx, agentID),
-	})
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskRejected, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusCancelled,
+		"agent", t.manager.AgentKeyFromID(ctx, agentID),
+		WithSubject(task.Subject),
+		WithReason(reason),
+		WithContextInfo(ctx),
+	))
 	return NewResult(fmt.Sprintf("Task %s rejected.", taskID))
 }

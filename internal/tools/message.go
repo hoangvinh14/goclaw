@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -69,17 +70,17 @@ func (t *MessageTool) Parameters() map[string]any {
 }
 
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result {
-	action, _ := args["action"].(string)
+	action := argString(args, "action")
 	if action != "send" {
 		return ErrorResult(fmt.Sprintf("unsupported action: %s (only 'send' is supported)", action))
 	}
 
-	message, _ := args["message"].(string)
+	message := argString(args, "message")
 	if message == "" {
 		return ErrorResult("message is required")
 	}
 
-	channel, _ := args["channel"].(string)
+	channel := argString(args, "channel")
 	if channel == "" {
 		channel = ToolChannelFromCtx(ctx)
 	}
@@ -87,12 +88,45 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result 
 		return ErrorResult("channel is required (no current channel in context)")
 	}
 
-	target, _ := args["target"].(string)
+	target := argString(args, "target")
 	if target == "" {
 		target = ToolChatIDFromCtx(ctx)
 	}
 	if target == "" {
 		return ErrorResult("target chat ID is required (no current chat in context)")
+	}
+
+	// Self-send guard: prevent agent from sending to its own chat via message tool.
+	// Text self-sends are always blocked (response goes through normal outbound).
+	// MEDIA self-sends are allowed ONLY when the file was NOT already queued for
+	// delivery (i.e. write_file was called with deliver=false). This prevents both
+	// duplicate delivery (deliver=true then message MEDIA:) and runaway retry loops
+	// (deliver=false then message MEDIA: blocked unconditionally).
+	ctxChannel := ToolChannelFromCtx(ctx)
+	ctxChatID := ToolChatIDFromCtx(ctx)
+	isSelfSend := ctxChannel != "" && ctxChatID != "" && channel == ctxChannel && target == ctxChatID
+	if isSelfSend {
+		isMediaSend := embeddedMediaPattern.MatchString(message)
+		if !isMediaSend {
+			return ErrorResult("You are already responding to this chat. Your response text will be delivered automatically. Do not use the message tool to send text to your own chat — just include the content in your response text. To deliver files, use write_file with deliver=true instead.")
+		}
+		// MEDIA self-send: block if ALL referenced files are already queued for delivery.
+		// Extracts paths from both standalone "MEDIA:path" and embedded multi-line messages.
+		if dm := DeliveredMediaFromCtx(ctx); dm != nil {
+			mediaRefs := embeddedMediaPattern.FindAllString(message, -1)
+			allDelivered := len(mediaRefs) > 0
+			for _, raw := range mediaRefs {
+				if filePath, ok := t.resolveMediaPath(ctx, raw); ok {
+					if !dm.IsDelivered(filePath) {
+						allDelivered = false
+						break
+					}
+				}
+			}
+			if allDelivered {
+				return ErrorResult("This file is already queued for automatic delivery via write_file(deliver=true). Do not send it again. To deliver files that were written with deliver=false, use write_file again with deliver=true, or use message(MEDIA:path) which is allowed for undelivered files.")
+			}
+		}
 	}
 
 	// Tenant isolation: validate channel belongs to current tenant.
@@ -296,6 +330,37 @@ func mimeFromPath(path string) string {
 	}
 }
 
+// argString reads a tool argument as a non-empty string. LLM tool JSON often encodes
+// numeric chat IDs as JSON numbers (float64); a plain .(string) type assert would
+// ignore them and fall back to context — wrong for proactive sends to a group.
+func argString(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return strings.TrimSpace(s)
+	case float64:
+		if s != s { // NaN
+			return ""
+		}
+		// Telegram chat IDs are integers; json.Unmarshal uses float64 for all numbers.
+		if s == float64(int64(s)) {
+			return strconv.FormatInt(int64(s), 10)
+		}
+		return strings.TrimSpace(fmt.Sprintf("%.0f", s))
+	case int:
+		return strconv.FormatInt(int64(s), 10)
+	case int64:
+		return strconv.FormatInt(s, 10)
+	case json.Number:
+		return strings.TrimSpace(string(s))
+	default:
+		return strings.TrimSpace(fmt.Sprint(s))
+	}
+}
+
 // isGroupContext returns true if the current context indicates a group conversation.
 func isGroupContext(ctx context.Context) bool {
 	userID := store.UserIDFromContext(ctx)
@@ -305,9 +370,12 @@ func isGroupContext(ctx context.Context) bool {
 }
 
 // resolveMediaPath extracts and validates a file path from a "MEDIA:path" string.
-// Uses the same workspace-aware path resolution as other filesystem tools:
-//   - When restrict_to_workspace is true: allows workspace dir + /tmp/
-//   - When restrict_to_workspace is false: allows any valid path
+// Uses the same workspace-aware path resolution as other filesystem tools.
+// Multi-tenant isolation forces MEDIA: paths through restricted resolution
+// first, with one explicit fallback for generated media artifacts under /tmp/.
+// In practice MEDIA: paths may resolve to:
+//   - files inside the agent workspace
+//   - absolute paths under /tmp/ for generated media artifacts
 //
 // Relative paths are resolved against the agent's workspace.
 func (t *MessageTool) resolveMediaPath(ctx context.Context, s string) (string, bool) {

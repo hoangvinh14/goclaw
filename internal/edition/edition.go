@@ -7,15 +7,17 @@ import "sync/atomic"
 
 // Edition defines the feature limits for a GoClaw instance.
 type Edition struct {
-	Name           string         `json:"name"`             // "standard" or "lite"
-	MaxAgents      int            `json:"max_agents"`       // 0 = unlimited
-	MaxTeams       int            `json:"max_teams"`        // 0 = unlimited
-	MaxTeamMembers int            `json:"max_team_members"` // 0 = unlimited
-	MaxChannels    map[string]int `json:"max_channels"`     // per channel type, nil = unlimited
-	KGEnabled      bool           `json:"kg_enabled"`
-	RBACEnabled    bool           `json:"rbac_enabled"`
-	TeamFullMode   bool           `json:"team_full_mode"`   // false = lite task actions only
-	VectorSearch   bool           `json:"vector_search"`    // false = FTS5 only
+	Name                  string         `json:"name"`                    // "standard" or "lite"
+	MaxAgents             int            `json:"max_agents"`              // 0 = unlimited
+	MaxTeams              int            `json:"max_teams"`               // 0 = unlimited
+	MaxTeamMembers        int            `json:"max_team_members"`        // 0 = unlimited
+	MaxChannels           map[string]int `json:"max_channels"`            // per channel type, nil = unlimited
+	MaxSubagentConcurrent int            `json:"max_subagent_concurrent"` // 0 = unlimited
+	MaxSubagentDepth      int            `json:"max_subagent_depth"`      // 0 = use config default
+	KGEnabled             bool           `json:"kg_enabled"`
+	RBACEnabled           bool           `json:"rbac_enabled"`
+	TeamFullMode          bool           `json:"team_full_mode"`          // false = lite task actions only
+	VectorSearch          bool           `json:"vector_search"`           // false = FTS5 only
 }
 
 // --- Presets ---
@@ -31,15 +33,17 @@ var Standard = Edition{
 
 // Lite is the desktop/self-hosted edition with sensible limits.
 var Lite = Edition{
-	Name:           "lite",
-	MaxAgents:      5,
-	MaxTeams:       1,
-	MaxTeamMembers: 5,
-	MaxChannels:    map[string]int{"telegram": 1, "discord": 1},
-	KGEnabled:      false,
-	RBACEnabled:    false,
-	TeamFullMode:   false,
-	VectorSearch:   false,
+	Name:                  "lite",
+	MaxAgents:             5,
+	MaxTeams:              1,
+	MaxTeamMembers:        5,
+	MaxChannels:           map[string]int{"telegram": 1, "discord": 1},
+	MaxSubagentConcurrent: 2,
+	MaxSubagentDepth:      1,
+	KGEnabled:             false,
+	RBACEnabled:           false,
+	TeamFullMode:          false,
+	VectorSearch:          false,
 }
 
 // --- Global state ---

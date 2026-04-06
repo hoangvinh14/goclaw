@@ -48,7 +48,7 @@ export interface ChatMessage extends Message {
 
 /** Agent event payload from WS event "agent" */
 export interface AgentEventPayload {
-  type: string; // "run.started" | "run.completed" | "run.failed" | "chunk" | "tool.call" | "tool.result" | "activity" | "block.reply" | "run.retrying"
+  type: string; // "run.started" | "run.completed" | "run.failed" | "run.cancelled" | "chunk" | "tool.call" | "tool.result" | "activity" | "block.reply" | "run.retrying"
   agentId: string;
   runId: string;
   runKind?: string; // "delegation" | "announce" — omitted for user-initiated runs

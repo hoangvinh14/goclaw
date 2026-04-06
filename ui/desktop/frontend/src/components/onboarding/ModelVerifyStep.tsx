@@ -96,13 +96,13 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
   return (
     <div className="bg-surface-secondary border border-border rounded-xl p-6 space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-text-primary">Select & Verify Model</h2>
-        <p className="text-sm text-text-muted">Choose a model and test the connection.</p>
+        <h2 className="text-lg font-semibold text-text-primary">{t('desktop:onboarding.modelStep')}</h2>
+        <p className="text-sm text-text-muted">{t('desktop:onboarding.modelStepDesc')}</p>
       </div>
 
       {/* Provider badge */}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-text-muted">Provider</span>
+        <span className="text-sm text-text-muted">{t('common:provider')}</span>
         <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-surface-tertiary border border-border text-text-secondary">
           {providerLabel}
         </span>
@@ -110,7 +110,7 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
 
       {/* Model selection */}
       <div className="space-y-1.5">
-        <label className="block text-sm font-medium text-text-secondary">Model</label>
+        <label className="block text-sm font-medium text-text-secondary">{t('common:model')}</label>
         <Combobox
           value={model}
           onChange={setModel}
@@ -121,7 +121,7 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
         />
         {!loading && models.length === 0 && (
           <p className="text-xs text-text-muted">
-            No models returned by API. You can type a model name manually.
+            {t('common:noModelsManualEntry')}
           </p>
         )}
       </div>
@@ -136,8 +136,8 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
             <path d="M4 10L8 14L16 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <div>
-            <p className="text-sm font-medium text-success">Model verified</p>
-            <p className="text-xs text-text-muted">{model} is working with {providerLabel}</p>
+            <p className="text-sm font-medium text-success">{t('common:modelVerified')}</p>
+            <p className="text-xs text-text-muted">{t('common:modelVerifiedWith', { model, provider: providerLabel })}</p>
           </div>
         </div>
       )}
@@ -147,7 +147,7 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
           onClick={onBack}
           className="px-4 py-2.5 border border-border rounded-lg text-sm font-medium text-text-secondary hover:bg-surface-tertiary transition-colors"
         >
-          &larr; Back
+          &larr; {t('common:back')}
         </button>
         <div className="flex gap-2">
           <button
@@ -163,7 +163,7 @@ export function ModelVerifyStep({ provider, initialModel, onBack, onComplete }: 
             disabled={!verified}
             className="px-6 py-2.5 bg-accent text-white rounded-lg font-medium hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Continue
+            {t('common:continue')}
           </button>
         </div>
       </div>

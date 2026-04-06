@@ -71,7 +71,7 @@ func (r *MethodRouter) Handle(ctx context.Context, client *Client, req *protocol
 				client.SendResponse(protocol.NewErrorResponse(
 					req.ID,
 					protocol.ErrUnauthorized,
-					i18n.T(locale, i18n.MsgPermissionDenied, req.Method),
+					i18n.T(locale, i18n.MsgPermissionDenied, req.Method+" requires "+string(permissions.MethodRole(req.Method))+" role"),
 				))
 				return
 			}
@@ -464,6 +464,7 @@ func (r *MethodRouter) handleHealth(ctx context.Context, client *Client, req *pr
 			resp["latestVersion"] = info.LatestVersion
 			resp["updateAvailable"] = info.UpdateAvailable
 			resp["updateUrl"] = info.UpdateURL
+			resp["releaseNotes"] = info.ReleaseNotes
 		}
 	}
 	client.SendResponse(protocol.NewOKResponse(req.ID, resp))

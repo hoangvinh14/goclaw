@@ -106,7 +106,7 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 
 			// Collect contact even when bot is not mentioned (cache prevents DB spam).
 			if cc := c.ContactCollector(); cc != nil {
-				cc.EnsureContact(ctx, c.Type(), c.Name(), mc.SenderID, mc.SenderID, senderName, "", "group")
+				cc.EnsureContact(ctx, c.Type(), c.Name(), mc.SenderID, mc.SenderID, senderName, "", "group", "user", "", "")
 			}
 
 			slog.Debug("feishu group message recorded (no mention)",
@@ -162,13 +162,14 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 
 	// Collect contact for processed messages (DM + group-mentioned).
 	if cc := c.ContactCollector(); cc != nil {
-		cc.EnsureContact(ctx, c.Type(), c.Name(), mc.SenderID, mc.SenderID, senderName, "", peerKind)
+		cc.EnsureContact(ctx, c.Type(), c.Name(), mc.SenderID, mc.SenderID, senderName, "", peerKind, "user", "", "")
 	}
 
 	metadata := map[string]string{
 		"message_id":    messageID,
 		"chat_type":     mc.ChatType,
 		"sender_name":   senderName,
+		"display_name":  senderName,
 		"mentioned_bot": fmt.Sprintf("%t", mc.MentionedBot),
 		"platform":      channels.TypeFeishu,
 	}
@@ -290,6 +291,7 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 		UserID:       userID,
 		AgentID:      targetAgentID,
 		HistoryLimit: c.historyLimit,
+		TenantID:     c.TenantID(),
 		Metadata:     metadata,
 	})
 

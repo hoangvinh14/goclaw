@@ -108,7 +108,7 @@ export function MemoryDocumentDialog({ open, onOpenChange, agentId, document }: 
 
   return (
     <Dialog open={open} onOpenChange={(v) => !saving && onOpenChange(v)}>
-      <DialogContent aria-describedby={undefined} className="max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent aria-describedby={undefined} className="max-h-[85vh] w-[95vw] flex flex-col sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="font-mono text-sm">{document?.path}</span>

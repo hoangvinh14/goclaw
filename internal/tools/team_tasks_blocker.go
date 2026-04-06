@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -46,21 +45,22 @@ func (t *TeamTasksTool) handleBlockerComment(
 	// 2. Notify subscriber → "❌ Task failed" → chat channel (direct outbound)
 	// 3. WS broadcast → web UI dashboard real-time update
 	memberKey := t.manager.AgentKeyFromID(ctx, agentID)
-	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskFailed, protocol.TeamTaskEventPayload{
-		TeamID:        team.ID.String(),
-		TaskID:        taskID.String(),
-		TaskNumber:    task.TaskNumber,
-		Subject:       task.Subject,
-		Status:        store.TeamTaskStatusFailed,
-		Reason:        reason,
-		OwnerAgentKey: memberKey,
-		UserID:        store.UserIDFromContext(ctx),
-		Channel:       task.Channel,
-		ChatID:        task.ChatID,
-		Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:     "agent",
-		ActorID:       memberKey,
-	})
+	blockerPeerKind := ""
+	if pk, ok := task.Metadata[TaskMetaPeerKind].(string); ok {
+		blockerPeerKind = pk
+	}
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskFailed, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		store.TeamTaskStatusFailed,
+		"agent", memberKey,
+		WithTaskInfo(task.TaskNumber, task.Subject),
+		WithOwnerAgentKey(memberKey),
+		WithReason(reason),
+		WithUserID(store.UserIDFromContext(ctx)),
+		WithChannel(task.Channel),
+		WithChatID(task.ChatID),
+		WithPeerKind(blockerPeerKind),
+	))
 
 	// Escalate to leader if enabled in team settings.
 	escalationCfg := ParseBlockerEscalationConfig(team.Settings)
@@ -79,6 +79,7 @@ func (t *TeamTasksTool) handleBlockerComment(
 				ChatID:   task.ChatID,
 				Content:  escalationMsg,
 				UserID:   store.UserIDFromContext(ctx),
+				PeerKind: blockerPeerKind,
 				TenantID: store.TenantIDFromContext(ctx),
 				AgentID:  leadAg.AgentKey,
 			}) {

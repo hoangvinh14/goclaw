@@ -22,7 +22,6 @@ export interface SubagentsConfig {
 export interface CompactionConfig {
   reserveTokensFloor?: number;
   maxHistoryShare?: number;
-  minMessages?: number;
   keepLastMessages?: number;
   memoryFlush?: {
     enabled?: boolean;
@@ -89,6 +88,13 @@ export type EffectiveChatGPTOAuthRoutingStrategy =
   | "priority_order";
 
 export type ChatGPTOAuthRoutingOverrideMode = "inherit" | "custom";
+export type ReasoningOverrideMode = "inherit" | "custom";
+
+export interface AgentReasoningConfig {
+  override_mode?: ReasoningOverrideMode;
+  effort?: string;
+  fallback?: "downgrade" | "provider_default" | "off";
+}
 
 export interface ChatGPTOAuthRoutingConfig {
   override_mode?: ChatGPTOAuthRoutingOverrideMode;

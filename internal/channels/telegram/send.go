@@ -28,6 +28,16 @@ var (
 	htmlTagRe            = regexp.MustCompile(`<[^>]*>`)
 )
 
+// extractMigrateChatID checks if a Telegram API error contains a group→supergroup
+// migration indicator and returns the new chat ID, or 0 if not a migration error.
+func extractMigrateChatID(err error) int64 {
+	var apiErr *telegoapi.Error
+	if errors.As(err, &apiErr) && apiErr.Parameters != nil && apiErr.Parameters.MigrateToChatID != 0 {
+		return apiErr.Parameters.MigrateToChatID
+	}
+	return 0
+}
+
 const (
 	sendMaxRetries     = 3
 	sendRetryDelay     = 2 * time.Second
@@ -40,16 +50,19 @@ func stripHTML(s string) string {
 	return html.UnescapeString(htmlTagRe.ReplaceAllString(s, ""))
 }
 
-// isRetryableNetworkErr checks if a Telegram API error is a transient network/server error
-// worth retrying. Covers transport-level failures and Telegram 5xx server errors.
+// isRetryableNetworkErr checks if a Telegram API error is a transient error
+// worth retrying. Covers 429 rate limits, 5xx server errors, and transport failures.
 func isRetryableNetworkErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for Telegram API 5xx errors via typed error.
+	// Check for Telegram API errors via typed error.
 	var apiErr *telegoapi.Error
-	if errors.As(err, &apiErr) && apiErr.ErrorCode >= 500 {
-		return true
+	if errors.As(err, &apiErr) {
+		// 429 = rate limited (transient), 5xx = server error (transient)
+		if apiErr.ErrorCode == 429 || apiErr.ErrorCode >= 500 {
+			return true
+		}
 	}
 	// Transport-level errors (timeout, reset, DNS, etc.)
 	s := err.Error()
@@ -107,15 +120,23 @@ func (c *Channel) retrySend(ctx context.Context, name string, resetFn func(), fn
 			c.enableIPv4Only()
 		}
 
+		// Honor Telegram's retry_after for 429 rate limit errors.
+		delay := sendRetryDelay * time.Duration(attempt)
+		var retryAPIErr *telegoapi.Error
+		if errors.As(err, &retryAPIErr) && retryAPIErr.ErrorCode == 429 &&
+			retryAPIErr.Parameters != nil && retryAPIErr.Parameters.RetryAfter > 0 {
+			delay = time.Duration(retryAPIErr.Parameters.RetryAfter+1) * time.Second // +1s safety margin
+		}
+
 		slog.Warn("telegram send retry",
-			"func", name, "attempt", attempt, "max", sendMaxRetries, "error", err)
+			"func", name, "attempt", attempt, "max", sendMaxRetries, "delay", delay, "error", err)
 		if resetFn != nil {
 			resetFn()
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(sendRetryDelay * time.Duration(attempt)):
+		case <-time.After(delay):
 		}
 	}
 	return err
@@ -218,7 +239,17 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 			c.placeholders.Delete(localKey)
 			_ = c.deleteMessage(ctx, chatID, pID.(int))
 		}
-		return c.sendMediaMessage(ctx, chatID, msg, replyToMsgID, threadID)
+		err := c.sendMediaMessage(ctx, chatID, msg, replyToMsgID, threadID)
+		// Migration fallback: group upgraded to supergroup — retry with new chat ID.
+		if err != nil {
+			if newChatID := extractMigrateChatID(err); newChatID != 0 {
+				slog.Info("telegram: group migrated to supergroup (media send-path)",
+					"old_chat_id", chatID, "new_chat_id", newChatID)
+				c.migrateGroupChat(ctx, chatID, newChatID)
+				return c.sendMediaMessage(ctx, newChatID, msg, replyToMsgID, threadID)
+			}
+		}
+		return err
 	}
 
 	// Text-only message
@@ -252,6 +283,13 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 				slog.Warn("telegram: final edit timed out or lost, skipping chunk 0 of multi-chunk response",
 					"chat_id", chatID, "message_id", msgID, "error", err)
 				startChunk = 1
+			} else if isRetryableNetworkErr(err) {
+				// Retryable error (429 rate limit, 5xx, network). The stream message
+				// still exists with valid streamed content — don't delete it.
+				// Sending fresh would also fail, so keep the stream message as-is.
+				slog.Warn("telegram: final edit failed with retryable error, keeping stream message",
+					"chat_id", chatID, "message_id", msgID, "error", err)
+				return nil
 			} else {
 				// Edit failed definitely (400 rejection), or a single-chunk edit timed out.
 				// For single-chunk answers, we delete (best-effort) and send fresh to
@@ -389,6 +427,17 @@ func (c *Channel) sendHTMLWithDepth(ctx context.Context, chatID int64, htmlConte
 	})
 
 	if err != nil {
+		// Case 0: Group migrated to supergroup — update DB and retry with new chat ID.
+		if newChatID := extractMigrateChatID(err); newChatID != 0 {
+			slog.Info("telegram: group migrated to supergroup (send-path)",
+				"old_chat_id", chatID, "new_chat_id", newChatID)
+			c.migrateGroupChat(ctx, chatID, newChatID)
+			if depth < maxSplitDepth {
+				return c.sendHTMLWithDepth(ctx, newChatID, htmlContent, replyTo, threadID, depth+1)
+			}
+			return fmt.Errorf("migration retry depth exceeded: %w", err)
+		}
+
 		errStr := err.Error()
 
 		// Case 1: Message too long. Split into smaller chunks and send individually.

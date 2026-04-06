@@ -5,6 +5,7 @@ package sqlitestore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,22 +23,22 @@ func NewSQLiteContactStore(db *sql.DB) *SQLiteContactStore {
 	return &SQLiteContactStore{db: db}
 }
 
-func (s *SQLiteContactStore) UpsertContact(ctx context.Context, channelType, channelInstance, senderID, userID, displayName, username, peerKind string) error {
+func (s *SQLiteContactStore) UpsertContact(ctx context.Context, channelType, channelInstance, senderID, userID, displayName, username, peerKind, contactType, threadID, threadType string) error {
 	tenantID := store.TenantIDFromContext(ctx)
 	if tenantID == uuid.Nil {
 		tenantID = store.MasterTenantID
 	}
-	// SQLite UPSERT: ON CONFLICT ... DO UPDATE SET
-	// NULLIF emulated with CASE WHEN
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO channel_contacts (channel_type, channel_instance, sender_id, user_id, display_name, username, peer_kind, tenant_id)
-		VALUES (?, NULLIF(?,?), ?, NULLIF(?,?), NULLIF(?,?), NULLIF(?,?), NULLIF(?,?), ?)
-		ON CONFLICT (tenant_id, channel_type, sender_id) DO UPDATE SET
+		INSERT INTO channel_contacts (channel_type, channel_instance, sender_id, user_id, display_name, username, peer_kind, contact_type, thread_id, thread_type, tenant_id)
+		VALUES (?, NULLIF(?,?), ?, NULLIF(?,?), NULLIF(?,?), NULLIF(?,?), NULLIF(?,?), ?, NULLIF(?,?), NULLIF(?,?), ?)
+		ON CONFLICT (tenant_id, channel_type, sender_id, COALESCE(thread_id, '')) DO UPDATE SET
 			display_name     = COALESCE(NULLIF(excluded.display_name,''), channel_contacts.display_name),
 			username         = COALESCE(NULLIF(excluded.username,''), channel_contacts.username),
 			user_id          = COALESCE(NULLIF(excluded.user_id,''), channel_contacts.user_id),
 			channel_instance = COALESCE(NULLIF(excluded.channel_instance,''), channel_contacts.channel_instance),
 			peer_kind        = COALESCE(NULLIF(excluded.peer_kind,''), channel_contacts.peer_kind),
+			contact_type     = excluded.contact_type,
+			thread_type      = COALESCE(NULLIF(excluded.thread_type,''), channel_contacts.thread_type),
 			last_seen_at     = CURRENT_TIMESTAMP`,
 		channelType,
 		channelInstance, "",
@@ -46,6 +47,9 @@ func (s *SQLiteContactStore) UpsertContact(ctx context.Context, channelType, cha
 		displayName, "",
 		username, "",
 		peerKind, "",
+		contactType,
+		threadID, "",
+		threadType, "",
 		tenantID,
 	)
 	return err
@@ -71,6 +75,10 @@ func contactWhereSQLite(ctx context.Context, opts store.ContactListOpts) (string
 		conditions = append(conditions, "peer_kind = ?")
 		args = append(args, opts.PeerKind)
 	}
+	if opts.ContactType != "" {
+		conditions = append(conditions, "contact_type = ?")
+		args = append(args, opts.ContactType)
+	}
 	if opts.Search != "" {
 		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(opts.Search)
 		pattern := escaped + "%"
@@ -86,14 +94,14 @@ func contactWhereSQLite(ctx context.Context, opts store.ContactListOpts) (string
 }
 
 const contactSelectCols = `id, channel_type, channel_instance, sender_id, user_id,
-		display_name, username, avatar_url, peer_kind, merged_id,
+		display_name, username, avatar_url, peer_kind, contact_type, thread_id, thread_type, merged_id,
 		first_seen_at, last_seen_at`
 
 func scanContact(rows *sql.Rows) (store.ChannelContact, error) {
 	var c store.ChannelContact
 	err := rows.Scan(
 		&c.ID, &c.ChannelType, &c.ChannelInstance, &c.SenderID, &c.UserID,
-		&c.DisplayName, &c.Username, &c.AvatarURL, &c.PeerKind, &c.MergedID,
+		&c.DisplayName, &c.Username, &c.AvatarURL, &c.PeerKind, &c.ContactType, &c.ThreadID, &c.ThreadType, &c.MergedID,
 		&c.FirstSeenAt, &c.LastSeenAt,
 	)
 	return c, err
@@ -149,9 +157,7 @@ func (s *SQLiteContactStore) GetContactsBySenderIDs(ctx context.Context, senderI
 	}
 
 	// SQLite has no DISTINCT ON; emulate with GROUP BY + MAX rowid trick via subquery
-	query := `SELECT id, channel_type, channel_instance, sender_id, user_id,
-		display_name, username, avatar_url, peer_kind, merged_id,
-		first_seen_at, last_seen_at
+	query := `SELECT ` + contactSelectCols + `
 		FROM channel_contacts
 		WHERE sender_id IN (` + strings.Join(placeholders, ",") + `)
 		GROUP BY sender_id
@@ -182,12 +188,43 @@ func (s *SQLiteContactStore) GetContactByID(ctx context.Context, id uuid.UUID) (
 	var c store.ChannelContact
 	if err := row.Scan(
 		&c.ID, &c.ChannelType, &c.ChannelInstance, &c.SenderID, &c.UserID,
-		&c.DisplayName, &c.Username, &c.AvatarURL, &c.PeerKind, &c.MergedID,
+		&c.DisplayName, &c.Username, &c.AvatarURL, &c.PeerKind, &c.ContactType,
+		&c.ThreadID, &c.ThreadType, &c.MergedID,
 		&c.FirstSeenAt, &c.LastSeenAt,
 	); err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+
+func (s *SQLiteContactStore) GetSenderIDsByContactIDs(ctx context.Context, contactIDs []uuid.UUID) ([]string, error) {
+	if len(contactIDs) == 0 {
+		return nil, nil
+	}
+	tid := store.TenantIDFromContext(ctx)
+	placeholders := make([]string, len(contactIDs))
+	args := make([]any, len(contactIDs)+1)
+	for i, id := range contactIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	args[len(contactIDs)] = tid
+	q := fmt.Sprintf("SELECT sender_id FROM channel_contacts WHERE id IN (%s) AND tenant_id = ?",
+		strings.Join(placeholders, ","))
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, err
+		}
+		result = append(result, sid)
+	}
+	return result, rows.Err()
 }
 
 func (s *SQLiteContactStore) MergeContacts(ctx context.Context, contactIDs []uuid.UUID, tenantUserID uuid.UUID) error {
@@ -252,4 +289,20 @@ func (s *SQLiteContactStore) GetContactsByMergedID(ctx context.Context, mergedID
 		contacts = append(contacts, c)
 	}
 	return contacts, rows.Err()
+}
+
+func (s *SQLiteContactStore) ResolveTenantUserID(ctx context.Context, channelType, senderID string) (string, error) {
+	tid := store.TenantIDFromContext(ctx)
+	var tenantUserID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT tu.user_id FROM channel_contacts cc
+		 JOIN tenant_users tu ON cc.merged_id = tu.id
+		 WHERE cc.tenant_id = ? AND cc.channel_type = ? AND cc.sender_id = ?
+		 AND cc.merged_id IS NOT NULL`,
+		tid, channelType, senderID,
+	).Scan(&tenantUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return tenantUserID, err
 }

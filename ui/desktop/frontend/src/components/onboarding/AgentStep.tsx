@@ -97,7 +97,7 @@ export function AgentStep({ provider, model, onBack, onComplete }: AgentStepProp
       })
       setCreatedAgent({ id: result.id, name: displayName.trim() || agentKey })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create agent')
+      setError(err instanceof Error ? err.message : t('common:failedToCreateAgent'))
     } finally {
       setLoading(false)
     }

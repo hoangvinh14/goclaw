@@ -41,7 +41,9 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 	}
 
 	if cfg.Providers.OpenRouter.APIKey != "" {
-		registry.Register(providers.NewOpenAIProvider("openrouter", cfg.Providers.OpenRouter.APIKey, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4-5-20250929"))
+		orProv := providers.NewOpenAIProvider("openrouter", cfg.Providers.OpenRouter.APIKey, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4-5-20250929")
+		orProv.WithSiteInfo("https://goclaw.sh", "GoClaw")
+		registry.Register(orProv)
 		slog.Info("registered provider", "name", "openrouter")
 	}
 
@@ -134,6 +136,40 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 		}
 		registry.Register(providers.NewOpenAIProvider("ollama-cloud", cfg.Providers.OllamaCloud.APIKey, base, "llama3.3"))
 		slog.Info("registered provider", "name", "ollama-cloud")
+	}
+
+	// Novita AI — OpenAI-compatible endpoint.
+	if cfg.Providers.Novita.APIKey != "" {
+		base := cfg.Providers.Novita.APIBase
+		if base == "" {
+			base = store.NovitaDefaultAPIBase
+		}
+		registry.Register(providers.NewOpenAIProvider("novita", cfg.Providers.Novita.APIKey, base, store.NovitaDefaultModel))
+		slog.Info("registered provider", "name", "novita")
+	}
+
+	// BytePlus ModelArk — OpenAI-compatible (standard Bearer auth).
+	if cfg.Providers.BytePlus.APIKey != "" {
+		base := cfg.Providers.BytePlus.APIBase
+		if base == "" {
+			base = store.BytePlusDefaultAPIBase
+		}
+		prov := providers.NewOpenAIProvider("byteplus", cfg.Providers.BytePlus.APIKey, base, store.BytePlusDefaultModel)
+		prov.WithProviderType(store.ProviderBytePlus)
+		registry.Register(prov)
+		slog.Info("registered provider", "name", "byteplus")
+	}
+
+	// BytePlus ModelArk Coding Plan — separate endpoint for developer tools quota.
+	if cfg.Providers.BytePlusCoding.APIKey != "" {
+		base := cfg.Providers.BytePlusCoding.APIBase
+		if base == "" {
+			base = store.BytePlusCodingDefaultAPIBase
+		}
+		prov := providers.NewOpenAIProvider("byteplus-coding", cfg.Providers.BytePlusCoding.APIKey, base, store.BytePlusDefaultModel)
+		prov.WithProviderType(store.ProviderBytePlusCoding)
+		registry.Register(prov)
+		slog.Info("registered provider", "name", "byteplus-coding")
 	}
 
 	// Claude CLI provider (subscription-based, no API key needed)
@@ -274,12 +310,13 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			continue
 		}
 		// Local Ollama requires no API key — handle before the key guard (same pattern as ClaudeCLI).
+		// api_base is stored with /v1 (normalized at write time), so no suffix appending needed.
 		if p.ProviderType == store.ProviderOllama {
 			host := p.APIBase
 			if host == "" {
-				host = "http://localhost:11434"
+				host = "http://localhost:11434/v1"
 			}
-			registry.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, "ollama", config.DockerLocalhost(host+"/v1"), "llama3.3"))
+			registry.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, "ollama", config.DockerLocalhost(host), "llama3.3"))
 			slog.Info("registered provider from DB", "name", p.Name)
 			continue
 		}
@@ -341,11 +378,36 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, base, "")
 			prov.WithProviderType(p.ProviderType)
 			registry.RegisterForTenant(p.TenantID, prov)
+		case store.ProviderNovita:
+			base := p.APIBase
+			if base == "" {
+				base = store.NovitaDefaultAPIBase
+			}
+			registry.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, p.APIKey, base, store.NovitaDefaultModel))
+		case store.ProviderBytePlus:
+			base := p.APIBase
+			if base == "" {
+				base = store.BytePlusDefaultAPIBase
+			}
+			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, base, store.BytePlusDefaultModel)
+			prov.WithProviderType(p.ProviderType)
+			registry.RegisterForTenant(p.TenantID, prov)
+		case store.ProviderBytePlusCoding:
+			base := p.APIBase
+			if base == "" {
+				base = store.BytePlusCodingDefaultAPIBase
+			}
+			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, base, store.BytePlusDefaultModel)
+			prov.WithProviderType(p.ProviderType)
+			registry.RegisterForTenant(p.TenantID, prov)
 		default:
 			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
 			prov.WithProviderType(p.ProviderType)
 			if p.ProviderType == store.ProviderMiniMax {
 				prov.WithChatPath("/text/chatcompletion_v2")
+			}
+			if p.ProviderType == store.ProviderOpenRouter {
+				prov.WithSiteInfo("https://goclaw.sh", "GoClaw")
 			}
 			registry.RegisterForTenant(p.TenantID, prov)
 		}

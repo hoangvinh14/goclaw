@@ -87,9 +87,10 @@ func (s *PGPairingStore) ApprovePairing(ctx context.Context, code, approvedBy st
 	var senderID, channel, chatID string
 	var metaJSON []byte
 	var reqTenantID uuid.UUID
-	// Code lookup is cross-tenant (random token, approver is WS/HTTP user)
+	// Code lookup is cross-tenant (random token, approver is WS/HTTP user).
+	// Also check expires_at to close race between prune DELETE and this SELECT.
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, sender_id, channel, chat_id, COALESCE(metadata, '{}'), tenant_id FROM pairing_requests WHERE code = $1", code,
+		"SELECT id, sender_id, channel, chat_id, COALESCE(metadata, '{}'), tenant_id FROM pairing_requests WHERE code = $1 AND expires_at > NOW()", code,
 	).Scan(&reqID, &senderID, &channel, &chatID, &metaJSON, &reqTenantID)
 	if err != nil {
 		return nil, fmt.Errorf("pairing code %s not found or expired", code)
@@ -231,6 +232,67 @@ func (s *PGPairingStore) ListPaired(ctx context.Context) []store.PairedDeviceDat
 		return []store.PairedDeviceData{}
 	}
 	return result
+}
+
+func (s *PGPairingStore) MigrateGroupChatID(ctx context.Context, channel, oldChatID, newChatID string) error {
+	tid := tenantIDForInsert(ctx)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migrate tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. paired_devices: update sender_id and chat_id
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE paired_devices
+		 SET sender_id = REPLACE(sender_id, $1, $2),
+		     chat_id = REPLACE(chat_id, $1, $2)
+		 WHERE sender_id LIKE '%' || $1 || '%'
+		   AND channel = $3
+		   AND tenant_id = $4`,
+		oldChatID, newChatID, channel, tid,
+	); err != nil {
+		return fmt.Errorf("migrate paired_devices: %w", err)
+	}
+
+	// 2. sessions: update session_key and user_id
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions
+		 SET session_key = REPLACE(session_key, ':' || $1, ':' || $2),
+		     user_id = REPLACE(user_id, ':' || $1, ':' || $2)
+		 WHERE session_key LIKE '%:telegram:%:' || $1 || '%'
+		   AND tenant_id = $3`,
+		oldChatID, newChatID, tid,
+	); err != nil {
+		return fmt.Errorf("migrate sessions: %w", err)
+	}
+
+	// 3. channel_contacts: update sender_id
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE channel_contacts
+		 SET sender_id = REPLACE(sender_id, $1, $2)
+		 WHERE sender_id LIKE '%' || $1 || '%'
+		   AND channel_type = 'telegram'
+		   AND tenant_id = $3`,
+		oldChatID, newChatID, tid,
+	); err != nil {
+		return fmt.Errorf("migrate channel_contacts: %w", err)
+	}
+
+	// 4. channel_pending_messages: update history_key
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE channel_pending_messages
+		 SET history_key = REPLACE(history_key, $1, $2)
+		 WHERE history_key LIKE '%' || $1 || '%'
+		   AND channel_name = $3
+		   AND tenant_id = $4`,
+		oldChatID, newChatID, channel, tid,
+	); err != nil {
+		return fmt.Errorf("migrate channel_pending_messages: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func generatePairingCode() string {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Dangerous command patterns organized into configurable deny groups.
@@ -72,9 +73,27 @@ func (t *ExecTool) DenyPaths(paths ...string) {
 	}
 }
 
-// AllowPathExemptions adds substrings that exempt a command from deny pattern matches.
-func (t *ExecTool) AllowPathExemptions(substrings ...string) {
-	t.denyExemptions = append(t.denyExemptions, substrings...)
+// AllowPathExemptions adds path prefixes that exempt a command from deny pattern matches.
+// Each shell argument is checked individually — commands like "cat .goclaw/skills-store/tool.py"
+// are exempt because the argument ".goclaw/skills-store/tool.py" starts with the prefix.
+func (t *ExecTool) AllowPathExemptions(prefixes ...string) {
+	t.denyExemptions = append(t.denyExemptions, prefixes...)
+}
+
+// normalizeCommand applies NFKC Unicode normalization and strips zero-width
+// characters before deny pattern matching, preventing Unicode-based bypasses.
+func normalizeCommand(s string) string {
+	// NFKC normalization: folds compatibility characters (e.g. fullwidth letters)
+	s = norm.NFKC.String(s)
+	// Strip zero-width characters that are invisible but can fragment tokens
+	s = strings.NewReplacer(
+		"\u200b", "", // zero-width space
+		"\u200c", "", // zero-width non-joiner
+		"\u200d", "", // zero-width joiner
+		"\u2060", "", // word joiner
+		"\ufeff", "", // BOM / zero-width no-break space
+	).Replace(s)
+	return s
 }
 
 // SetApprovalManager sets the exec approval manager for this tool.
@@ -113,6 +132,15 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *Result {
 		return ErrorResult("command is required")
 	}
 
+	// Reject NUL bytes — they cause silent shell truncation enabling injection.
+	if strings.ContainsRune(command, '\x00') {
+		return ErrorResult("command contains invalid NUL byte")
+	}
+
+	// Normalize command before all deny checks: NFKC + zero-width strip prevents
+	// Unicode-based pattern bypass while preserving functional command content.
+	normalizedCommand := normalizeCommand(command)
+
 	// Resolve deny patterns: per-agent overrides from context, fallback to all defaults.
 	denyOverrides := store.ShellDenyGroupsFromContext(ctx)
 	groupPatterns := ResolveDenyPatterns(denyOverrides)
@@ -130,14 +158,37 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *Result {
 
 	// Check for dangerous commands (applies to both host and sandbox).
 	for _, pattern := range allPatterns {
-		if pattern.MatchString(command) {
-			// Check if any exemption applies (e.g. skills-store within .goclaw)
+		if pattern.MatchString(normalizedCommand) {
+			// Check if exemption applies. Only exempt if EVERY field that
+			// individually matches the deny pattern is covered by an exemption.
+			// This prevents pipe/comment bypass: "cat /app/data/skills-store/x | cat /app/data/secret"
+			// — the second field matches deny but has no exemption → denied.
+			// Strips surrounding quotes (LLMs often quote paths) and rejects
+			// path traversal ("..") to prevent exemption escape.
 			exempt := false
-			for _, ex := range t.denyExemptions {
-				if strings.Contains(command, ex) {
-					exempt = true
-					break
+			trimmed := strings.TrimSpace(normalizedCommand)
+			fields := strings.Fields(trimmed)
+			matchingFields := 0
+			exemptFields := 0
+			for _, field := range fields {
+				clean := strings.Trim(field, `"'`)
+				if !pattern.MatchString(clean) {
+					continue // field doesn't trigger this deny pattern
 				}
+				matchingFields++
+				if strings.Contains(clean, "..") {
+					continue // path traversal — never exempt
+				}
+				for _, ex := range t.denyExemptions {
+					if strings.HasPrefix(clean, ex) {
+						exemptFields++
+						break
+					}
+				}
+			}
+			// Exempt only if at least one field matched AND all matched fields are exempt.
+			if matchingFields > 0 && exemptFields == matchingFields {
+				exempt = true
 			}
 			if exempt {
 				continue
@@ -145,7 +196,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *Result {
 
 			// Package install commands: route through approval flow instead of hard deny.
 			// This lets agents "request permission" from admin to install packages.
-			if t.approvalMgr != nil && matchesAny(command, pkgInstallPatterns) {
+			if t.approvalMgr != nil && matchesAny(normalizedCommand, pkgInstallPatterns) {
 				slog.Info("exec: package install requires approval", "command", truncateCmd(command, 100), "agent", t.agentID)
 				decision, err := t.approvalMgr.RequestApproval(command, t.agentID, 2*time.Minute)
 				if err != nil {
@@ -160,6 +211,11 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *Result {
 
 			return ErrorResult(fmt.Sprintf("command denied by safety policy: matches pattern %s", pattern.String()))
 		}
+	}
+
+	// Memory path hint: shell commands can't access DB-backed memory files.
+	if hint := MaybeMemoryExecHint(normalizedCommand); hint != "" {
+		return SilentResult(hint)
 	}
 
 	// Credentialed exec: if command matches a configured binary, use Direct Exec Mode.
@@ -285,7 +341,7 @@ func (t *ExecTool) executeOnHost(ctx context.Context, command, cwd string) *Resu
 		result = "(command completed with no output)"
 	}
 
-	return SilentResult(result)
+	return SilentResult(capExecOutput(result, execMaxOutputChars))
 }
 
 // executeInSandbox routes a command through a Docker sandbox container.
@@ -334,7 +390,7 @@ func (t *ExecTool) executeInSandbox(ctx context.Context, command, cwd, sandboxKe
 		output = "(command completed with no output)"
 	}
 
-	return SilentResult(output)
+	return SilentResult(capExecOutput(output, execMaxOutputChars))
 }
 
 // limitedBuffer caps output to prevent OOM from runaway commands.

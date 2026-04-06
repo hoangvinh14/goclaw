@@ -22,6 +22,8 @@ declare global {
           CheckForUpdate(): Promise<UpdateInfo>
           ApplyUpdate(): Promise<void>
           RestartApp(): Promise<void>
+          GetDataDir(): Promise<string>
+          ResetDatabase(): Promise<void>
           OpenFile(path: string): Promise<void>
           SaveFile(srcPath: string): Promise<void>
           DownloadURL(url: string, filename: string): Promise<void>
@@ -40,6 +42,8 @@ export const wails = {
   checkForUpdate: (): Promise<UpdateInfo> => window.go.main.App.CheckForUpdate(),
   applyUpdate: (): Promise<void> => window.go.main.App.ApplyUpdate(),
   restartApp: (): Promise<void> => window.go.main.App.RestartApp(),
+  getDataDir: (): Promise<string> => window.go.main.App.GetDataDir(),
+  resetDatabase: (): Promise<void> => window.go.main.App.ResetDatabase(),
   openFile: (path: string): Promise<void> => window.go.main.App.OpenFile(path),
   saveFile: (srcPath: string): Promise<void> => window.go.main.App.SaveFile(srcPath),
   downloadURL: (url: string, filename: string): Promise<void> => window.go.main.App.DownloadURL(url, filename),

@@ -105,10 +105,7 @@ func FetchGroups(ctx context.Context, sess *Session) ([]GroupListInfo, error) {
 
 	var allGroups []GroupListInfo
 	for i := 0; i < len(ids); i += batchSize {
-		end := i + batchSize
-		if end > len(ids) {
-			end = len(ids)
-		}
+		end := min(i+batchSize, len(ids))
 		batch := make(map[string]string, end-i)
 		for _, id := range ids[i:end] {
 			batch[id] = gridVerMap[id]

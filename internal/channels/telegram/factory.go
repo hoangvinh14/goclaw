@@ -42,19 +42,25 @@ type telegramInstanceConfig struct {
 // Factory creates a Telegram channel from DB instance data (no extra stores).
 func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 	msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
-	return buildChannel(name, creds, cfg, msgBus, pairingSvc, nil, nil, nil, nil)
+	return buildChannel(name, creds, cfg, msgBus, pairingSvc)
 }
 
-// FactoryWithStores returns a ChannelFactory that includes agent, configPerm, team, and pending message stores.
-func FactoryWithStores(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, pendingStore store.PendingMessageStore) channels.ChannelFactory {
+// FactoryWithStores returns a ChannelFactory that includes optional stores via functional options.
+func FactoryWithStores(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, subagentTaskStore store.SubagentTaskStore, pendingStore store.PendingMessageStore) channels.ChannelFactory {
 	return func(name string, creds json.RawMessage, cfg json.RawMessage,
 		msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
-		return buildChannel(name, creds, cfg, msgBus, pairingSvc, agentStore, configPermStore, teamStore, pendingStore)
+		return buildChannel(name, creds, cfg, msgBus, pairingSvc,
+			WithAgentStore(agentStore),
+			WithConfigPermStore(configPermStore),
+			WithTeamStore(teamStore),
+			WithSubagentTaskStore(subagentTaskStore),
+			WithPendingMessageStore(pendingStore),
+		)
 	}
 }
 
 func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
-	msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, pendingStore store.PendingMessageStore) (channels.Channel, error) {
+	msgBus *bus.MessageBus, pairingSvc store.PairingStore, opts ...Option) (channels.Channel, error) {
 
 	var c telegramCreds
 	if len(creds) > 0 {
@@ -111,7 +117,7 @@ func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
 		tgCfg.GroupPolicy = "pairing"
 	}
 
-	ch, err := New(tgCfg, msgBus, pairingSvc, agentStore, configPermStore, teamStore, pendingStore)
+	ch, err := New(tgCfg, msgBus, pairingSvc, opts...)
 	if err != nil {
 		return nil, err
 	}

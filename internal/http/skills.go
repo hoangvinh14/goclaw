@@ -2,11 +2,13 @@ package http
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -21,6 +23,11 @@ import (
 
 const maxSkillUploadSize = 20 << 20 // 20 MB
 
+var (
+	aggregateInstallDeps = skills.AggregateMissingDeps
+	installManagedDeps   = skills.InstallDeps
+)
+
 // SkillsHandler handles skill management HTTP endpoints.
 type SkillsHandler struct {
 	skills         store.SkillManageStore
@@ -30,6 +37,8 @@ type SkillsHandler struct {
 	msgBus         *bus.MessageBus
 	tenantCfgStore store.SkillTenantConfigStore
 	tenantStore    store.TenantStore
+	db             *sql.DB // for export/import direct queries
+	uploadLocks    sync.Map // per-slug mutex; bounded by validated slug set, entries are tiny (*sync.Mutex)
 }
 
 // NewSkillsHandler creates a handler for skill management endpoints.
@@ -45,6 +54,11 @@ func (h *SkillsHandler) tenantSkillsDir(r *http.Request) string {
 	return config.TenantSkillsStoreDir(h.dataDir, tid, slug)
 }
 
+func (h *SkillsHandler) skillUploadLock(scopeKey string) *sync.Mutex {
+	actual, _ := h.uploadLocks.LoadOrStore(scopeKey, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
 // emitCacheInvalidate broadcasts a cache invalidation event if msgBus is set.
 func (h *SkillsHandler) emitCacheInvalidate(kind, key string) {
 	if h.msgBus == nil {
@@ -58,19 +72,22 @@ func (h *SkillsHandler) emitCacheInvalidate(kind, key string) {
 
 // RegisterRoutes registers all skill management routes on the given mux.
 func (h *SkillsHandler) RegisterRoutes(mux *http.ServeMux) {
+	// Skill reads (viewer+)
 	mux.HandleFunc("GET /v1/skills", h.authMiddleware(h.handleList))
-	mux.HandleFunc("POST /v1/skills/upload", h.authMiddleware(h.handleUpload))
 	mux.HandleFunc("GET /v1/skills/{id}", h.authMiddleware(h.handleGet))
-	mux.HandleFunc("PUT /v1/skills/{id}", h.authMiddleware(h.handleUpdate))
-	mux.HandleFunc("DELETE /v1/skills/{id}", h.authMiddleware(h.handleDelete))
-	mux.HandleFunc("POST /v1/skills/{id}/grants/agent", h.authMiddleware(h.handleGrantAgent))
-	mux.HandleFunc("DELETE /v1/skills/{id}/grants/agent/{agentID}", h.authMiddleware(h.handleRevokeAgent))
-	mux.HandleFunc("POST /v1/skills/{id}/grants/user", h.authMiddleware(h.handleGrantUser))
-	mux.HandleFunc("DELETE /v1/skills/{id}/grants/user/{userID}", h.authMiddleware(h.handleRevokeUser))
 	mux.HandleFunc("GET /v1/agents/{agentID}/skills", h.authMiddleware(h.handleListAgentSkills))
 	mux.HandleFunc("GET /v1/skills/{id}/versions", h.authMiddleware(h.handleListVersions))
 	mux.HandleFunc("GET /v1/skills/{id}/files/{path...}", h.authMiddleware(h.handleReadFile))
 	mux.HandleFunc("GET /v1/skills/{id}/files", h.authMiddleware(h.handleListFiles))
+	// Skill writes (admin+)
+	mux.HandleFunc("POST /v1/skills/upload", h.adminMiddleware(h.handleUpload))
+	mux.HandleFunc("PUT /v1/skills/{id}", h.adminMiddleware(h.handleUpdate))
+	mux.HandleFunc("DELETE /v1/skills/{id}", h.adminMiddleware(h.handleDelete))
+	// Skill grants (admin+)
+	mux.HandleFunc("POST /v1/skills/{id}/grants/agent", h.adminMiddleware(h.handleGrantAgent))
+	mux.HandleFunc("DELETE /v1/skills/{id}/grants/agent/{agentID}", h.adminMiddleware(h.handleRevokeAgent))
+	mux.HandleFunc("POST /v1/skills/{id}/grants/user", h.adminMiddleware(h.handleGrantUser))
+	mux.HandleFunc("DELETE /v1/skills/{id}/grants/user/{userID}", h.adminMiddleware(h.handleRevokeUser))
 	// System-level operations: admin + master tenant only.
 	// These execute shell commands (pip/npm install) and affect the entire server.
 	mux.HandleFunc("POST /v1/skills/rescan-deps", h.adminMiddleware(h.handleRescanDeps))
@@ -78,9 +95,13 @@ func (h *SkillsHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/skills/install-dep", h.adminMiddleware(h.handleInstallDep))
 	mux.HandleFunc("GET /v1/skills/runtimes", h.adminMiddleware(h.handleRuntimes))
 	mux.HandleFunc("POST /v1/skills/{id}/toggle", h.adminMiddleware(h.handleToggle))
-	// Per-tenant overrides: tenant-level admin check inside handler (not system admin).
-	mux.HandleFunc("PUT /v1/skills/{id}/tenant-config", h.authMiddleware(h.handleSetTenantConfig))
-	mux.HandleFunc("DELETE /v1/skills/{id}/tenant-config", h.authMiddleware(h.handleDeleteTenantConfig))
+	// Per-tenant overrides (admin+)
+	mux.HandleFunc("PUT /v1/skills/{id}/tenant-config", h.adminMiddleware(h.handleSetTenantConfig))
+	mux.HandleFunc("DELETE /v1/skills/{id}/tenant-config", h.adminMiddleware(h.handleDeleteTenantConfig))
+	// Export / Import (admin+)
+	mux.HandleFunc("GET /v1/skills/export/preview", h.adminMiddleware(h.handleSkillsExportPreview))
+	mux.HandleFunc("GET /v1/skills/export", h.adminMiddleware(h.handleSkillsExport))
+	mux.HandleFunc("POST /v1/skills/import", h.adminMiddleware(h.handleSkillsImport))
 }
 
 func (h *SkillsHandler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -234,13 +255,17 @@ func (h *SkillsHandler) handleInstallDeps(w http.ResponseWriter, r *http.Request
 	if !h.requireMasterTenant(w, r) {
 		return
 	}
-	dirs := h.skills.ListSystemSkillDirs(r.Context())
+	// Use explicit master tenant context for system skill operations,
+	// consistent with rescanAndUpdate() pattern.
+	masterCtx := store.WithTenantID(r.Context(), store.MasterTenantID)
+
+	dirs := h.skills.ListSystemSkillDirs(masterCtx)
 	if len(dirs) == 0 {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "no system skills"})
 		return
 	}
 
-	manifest, missing := skills.AggregateMissingDeps(dirs)
+	manifest, missing := aggregateInstallDeps(dirs)
 	if len(missing) == 0 {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "all deps satisfied"})
 		return
@@ -253,25 +278,24 @@ func (h *SkillsHandler) handleInstallDeps(w http.ResponseWriter, r *http.Request
 		})
 	}
 
-	result, err := skills.InstallDeps(r.Context(), manifest, missing)
+	result, err := installManagedDeps(masterCtx, manifest, missing)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	// Re-check all system skills and update status after install
-	allSkills := h.skills.ListAllSkills(r.Context())
+	// Re-check all system skills, persist missing deps, and update status.
+	allSkills := h.skills.ListAllSkills(masterCtx)
+	statusChanged := false
 	for _, sk := range allSkills {
 		if !sk.IsSystem {
 			continue
 		}
-		dir, exists := dirs[sk.Slug]
-		if !exists {
+		if _, exists := dirs[sk.Slug]; !exists {
 			continue
 		}
 		m := h.scanWithFallback(sk)
 		if m == nil || m.IsEmpty() {
-			_ = dir // dir was used for direct scan; fallback uses sk.BaseDir
 			continue
 		}
 		ok, miss := skills.CheckSkillDeps(m)
@@ -279,10 +303,20 @@ func (h *SkillsHandler) handleInstallDeps(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			continue
 		}
-		if ok && sk.Status == "archived" {
-			_ = h.skills.UpdateSkill(r.Context(), id, map[string]any{"status": "active"})
-			h.skills.BumpVersion()
+
+		// Persist actual missing deps to DB so reload reflects reality.
+		_ = h.skills.StoreMissingDeps(masterCtx, id, miss)
+
+		// Update status in both directions.
+		switch {
+		case ok && sk.Status == "archived":
+			_ = h.skills.UpdateSkill(masterCtx, id, map[string]any{"status": "active"})
+			statusChanged = true
+		case !ok && sk.Status != "archived":
+			_ = h.skills.UpdateSkill(masterCtx, id, map[string]any{"status": "archived"})
+			statusChanged = true
 		}
+
 		status := "active"
 		if !ok {
 			status = "archived"
@@ -297,6 +331,9 @@ func (h *SkillsHandler) handleInstallDeps(w http.ResponseWriter, r *http.Request
 				},
 			})
 		}
+	}
+	if statusChanged {
+		h.skills.BumpVersion()
 	}
 
 	if h.msgBus != nil {

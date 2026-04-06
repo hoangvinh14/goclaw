@@ -100,7 +100,7 @@ func estimateArraySize(arr []json.RawMessage, elemLens []int, keep int) int {
 	placeholderLen := 22 + digitCount(dropped) + 17 // key + number + " elements omitted"}
 
 	total := 2 // [ and ]
-	for i := 0; i < keepHead; i++ {
+	for i := range keepHead {
 		total += elemLens[i]
 	}
 	total += placeholderLen
@@ -131,7 +131,7 @@ func buildTruncatedArray(arr []json.RawMessage, keepHead, keepTail int) string {
 	placeholder := fmt.Sprintf(`{"__truncated__":"%d elements omitted"}`, dropped)
 
 	parts := make([]string, 0, keepHead+1+keepTail)
-	for i := 0; i < keepHead; i++ {
+	for i := range keepHead {
 		parts = append(parts, string(arr[i]))
 	}
 	parts = append(parts, placeholder)
@@ -147,10 +147,7 @@ func truncateArrayElements(arr []json.RawMessage, maxLen int) string {
 	dropped := len(arr) - 2
 	placeholder := fmt.Sprintf(`{"__truncated__":"%d elements omitted"}`, dropped)
 	overhead := len("[,,]") + len(placeholder)
-	perElem := (maxLen - overhead) / 2
-	if perElem < 50 {
-		perElem = 50
-	}
+	perElem := max((maxLen-overhead)/2, 50)
 
 	first := TruncateMid(string(arr[0]), perElem)
 	last := TruncateMid(string(arr[len(arr)-1]), perElem)
