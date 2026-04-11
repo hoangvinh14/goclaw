@@ -161,12 +161,17 @@ func TestMarkdownToTelegramHTML_HTMLTagsConvertedFirst(t *testing.T) {
 			t.Errorf("<b>bold</b> should remain bold in output, got: %q", got)
 		}
 	})
-	t.Run("html italic input produces output", func(t *testing.T) {
-		// <i>italic</i> goes through htmlTagToMarkdown (→ _italic_ with known $1_ caveat)
-		// then through markdownToTelegramHTML — the result is non-empty, no panics.
+	t.Run("html italic tag round-trips", func(t *testing.T) {
+		// <i>italic</i> → _italic_ → <i>italic</i> through the full pipeline.
 		got := markdownToTelegramHTML("<i>italic</i>")
-		if got == "" {
-			t.Error("markdownToTelegramHTML should return non-empty for <i>italic</i>")
+		if !strings.Contains(got, "<i>italic</i>") {
+			t.Errorf("<i>italic</i> should remain italic in output, got: %q", got)
+		}
+	})
+	t.Run("html em tag round-trips", func(t *testing.T) {
+		got := markdownToTelegramHTML("<em>emphasis</em>")
+		if !strings.Contains(got, "<i>emphasis</i>") {
+			t.Errorf("<em>emphasis</em> should become <i>emphasis</i>, got: %q", got)
 		}
 	})
 	t.Run("html strike tag round-trips", func(t *testing.T) {
@@ -419,11 +424,8 @@ func TestHTMLTagToMarkdown(t *testing.T) {
 		{"<br/>", []string{"\n"}},
 		{"<b>bold</b>", []string{"**bold**"}},
 		{"<strong>bold</strong>", []string{"**bold**"}},
-		// NOTE: <i>/<em> use "_$1_" replacement where Go regexp treats $1_ as
-		// a named group reference (not group 1 + literal _), so content is lost.
-		// This is documented behavior of the current implementation.
-		// The pipeline still works end-to-end because <i> only appears in LLM
-		// output which gets processed through the full markdownToTelegramHTML chain.
+		{"<i>italic</i>", []string{"_italic_"}},
+		{"<em>italic</em>", []string{"_italic_"}},
 		{"<s>struck</s>", []string{"~~struck~~"}},
 		{"<del>deleted</del>", []string{"~~deleted~~"}},
 		{"<code>var</code>", []string{"`var`"}},
