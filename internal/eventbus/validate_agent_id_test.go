@@ -76,8 +76,9 @@ func TestValidateAgentID_NonUUIDWarns(t *testing.T) {
 }
 
 func TestValidateAgentID_DistinctFieldName_NoCollision(t *testing.T) {
-	// H6 mitigation: the field name must NOT be `agent_id` (which downstream
-	// observability tooling parses as UUID) — it must be `non_uuid_agent_id`.
+	// The log field name must NOT be `agent_id` (which downstream
+	// observability tooling parses as UUID) — it must be `non_uuid_agent_id`
+	// so the warning never collides with valid UUID-typed agent_id fields.
 	buf, restore := captureSlog(t)
 	defer restore()
 

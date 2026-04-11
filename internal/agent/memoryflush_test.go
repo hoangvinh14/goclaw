@@ -6,10 +6,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestBuildMemoryFlushPromptConfig_AgentUUIDPopulated asserts Fix A — the
+// TestBuildMemoryFlushPromptConfig_AgentUUIDPopulated asserts the
 // SystemPromptConfig returned by buildMemoryFlushPromptConfig carries the
-// AgentUUID. Historically missing; loop_history.go set it but memoryflush.go
-// did not, leading to identity drift (see PR #826 / brainstorm trap zone 2).
+// AgentUUID. loop_history.go always set it but memoryflush.go historically
+// did not, which would have caused identity drift in downstream DomainEvents
+// if AgentUUID ever reached the stable cache prefix.
 func TestBuildMemoryFlushPromptConfig_AgentUUIDPopulated(t *testing.T) {
 	u := uuid.New()
 	cfg := buildMemoryFlushPromptConfig(

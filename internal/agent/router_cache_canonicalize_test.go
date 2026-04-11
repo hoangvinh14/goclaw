@@ -36,10 +36,10 @@ func stubResolver(agentKey string) ResolverFunc {
 	}
 }
 
-// TestRouterGet_UUIDInputStoresCanonicalKey — Phase 2 FR-1.
-// When the caller passes a UUID-like string to Get(), the cache entry must
-// land under tenantID:agentKey (canonical), NOT tenantID:uuidStr.
-// Exercises the canonicalization path via a real resolver call.
+// TestRouterGet_UUIDInputStoresCanonicalKey verifies that when the caller
+// passes a UUID-like string to Get(), the cache entry lands under
+// tenantID:agentKey (canonical), NOT tenantID:uuidStr. Exercises the
+// canonicalization path via a real resolver call.
 func TestRouterGet_UUIDInputStoresCanonicalKey(t *testing.T) {
 	r := NewRouter()
 	r.SetResolver(stubResolver("goctech-leader"))
@@ -72,9 +72,9 @@ func TestRouterGet_UUIDInputStoresCanonicalKey(t *testing.T) {
 	}
 }
 
-// TestRouterGet_IdempotentCacheUnderKeyOrUUID — Phase 2 FR-4.
-// Calling Get() first with agent_key then with UUID should produce exactly
-// ONE cache entry — the canonical tenantID:agent_key.
+// TestRouterGet_IdempotentCacheUnderKeyOrUUID verifies that calling Get()
+// first with agent_key then with UUID produces exactly ONE cache entry — the
+// canonical tenantID:agent_key.
 func TestRouterGet_IdempotentCacheUnderKeyOrUUID(t *testing.T) {
 	r := NewRouter()
 	var resolveCount atomic.Int32
@@ -107,10 +107,10 @@ func TestRouterGet_IdempotentCacheUnderKeyOrUUID(t *testing.T) {
 	}
 }
 
-// TestRouterGet_UUIDCallerResolvesEveryTime — Phase 2 honest cost (H1).
-// A caller that keeps passing the UUID form never hits the canonical key on
-// read, so the resolver runs on every call. Document this behavior so future
-// refactors don't pretend the cache covers UUID inputs.
+// TestRouterGet_UUIDCallerResolvesEveryTime documents the honest cost of
+// canonicalization: a caller that keeps passing the UUID form never hits the
+// canonical key on read, so the resolver runs on every call. Pin this
+// behavior so future refactors don't pretend the cache covers UUID inputs.
 func TestRouterGet_UUIDCallerResolvesEveryTime(t *testing.T) {
 	r := NewRouter()
 	var resolveCount atomic.Int32

@@ -60,10 +60,10 @@ func assertBadRequest(t *testing.T, rr *httptest.ResponseRecorder, wantFragment 
 	}
 }
 
-// TestHandleUpload_InvalidAgentIDReturns400 asserts Phase 1 Fix B — bad form
-// `agent_id` is rejected at the HTTP boundary before any store call.
-// Closes the owner/lite edition gap where validateTeamMembership would skip
-// the UUID check.
+// TestHandleUpload_InvalidAgentIDReturns400 asserts bad form `agent_id` is
+// rejected at the HTTP boundary before any store call. Closes the
+// owner / lite edition gap where validateTeamMembership would skip the UUID
+// check.
 func TestHandleUpload_InvalidAgentIDReturns400(t *testing.T) {
 	h := &VaultHandler{} // no store wired — boundary check runs first
 	req := buildUploadRequest(t, map[string]string{
@@ -76,9 +76,10 @@ func TestHandleUpload_InvalidAgentIDReturns400(t *testing.T) {
 	assertBadRequest(t, rr, "invalid agent_id")
 }
 
-// TestHandleUpload_InvalidTeamIDReturns400 asserts Phase 1 Fix B for team_id.
-// This is the hole validateTeamMembership leaves open: it short-circuits on
-// owner role (line 57) and nil teamAccess (line 60), never parsing the UUID.
+// TestHandleUpload_InvalidTeamIDReturns400 asserts bad form `team_id` is
+// rejected at the HTTP boundary. validateTeamMembership short-circuits on
+// owner role and on nil teamAccess (lite edition), never parsing the UUID —
+// the boundary check closes that hole.
 func TestHandleUpload_InvalidTeamIDReturns400(t *testing.T) {
 	h := &VaultHandler{} // lite edition: teamAccess is nil
 	req := buildUploadRequest(t, map[string]string{
@@ -91,10 +92,9 @@ func TestHandleUpload_InvalidTeamIDReturns400(t *testing.T) {
 	assertBadRequest(t, rr, "invalid team_id")
 }
 
-// TestHandleUpload_InvalidAgentID_OwnerContext asserts the boundary check fires
-// regardless of role. Pre-Fix-B, validateTeamMembership skipped the check for
-// owner role — but agent_id was never validated at all upstream, so the UUID
-// hole also existed for admins. Boundary check closes it for every caller.
+// TestHandleUpload_InvalidAgentID_OwnerContext asserts the boundary check
+// fires regardless of role. The UUID hole existed for every caller — the
+// boundary check ignores role entirely.
 func TestHandleUpload_InvalidAgentID_OwnerContext(t *testing.T) {
 	h := &VaultHandler{}
 	req := buildUploadRequest(t, map[string]string{

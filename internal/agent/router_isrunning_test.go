@@ -10,11 +10,11 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
-// TestIsRunning_TenantScopedLookup — Phase 2 FR-5 (C6).
-// Router.IsRunning must accept ctx and lookup under tenant-scoped cache key.
-// Pre-fix: bare `r.agents[agentID]` lookup always returned false for any
-// tenant-scoped deployment, so the WS `agents.list` response incorrectly
-// showed `isRunning: false` for every live agent.
+// TestIsRunning_TenantScopedLookup asserts that Router.IsRunning accepts ctx
+// and looks up under the tenant-scoped cache key. A previous bare
+// `r.agents[agentID]` lookup always returned false for any tenant-scoped
+// deployment, so the WS `agents.list` response incorrectly showed every live
+// agent as `isRunning: false`.
 func TestIsRunning_TenantScopedLookup(t *testing.T) {
 	r := NewRouter()
 	tenantA := uuid.New()

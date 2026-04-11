@@ -194,10 +194,10 @@ func (r *Router) ListInfo() []AgentInfo {
 	return infos
 }
 
-// IsRunning checks if a specific agent is currently running (cached in router).
-// Ctx carries tenant scope — pre-fix (C6) this function did a bare lookup which
-// always returned false in tenant-scoped deployments, causing `agents.list` to
-// incorrectly report every live agent as idle.
+// IsRunning checks if a specific agent is currently running (cached in
+// router). Ctx carries tenant scope — without it, a bare lookup returns false
+// in tenant-scoped deployments because cache keys are stored as
+// `tenantID:agentKey` after resolution.
 func (r *Router) IsRunning(ctx context.Context, agentID string) bool {
 	cacheKey := agentCacheKey(ctx, agentID)
 	r.mu.RLock()

@@ -482,7 +482,7 @@ func (s *PGMemoryStore) Close() error { return nil }
 // either corrupt data or hide bugs as empty reads / zero-row updates. FK
 // constraints reject bad writes at the driver layer, but errors there come
 // back as cryptic PG 23503 — parseUUID catches them upstream with a clean
-// Go error. See docs/agent-identity-conventions.md trap zone 3.
+// Go error. See docs/agent-identity-conventions.md.
 func parseUUID(s string) (uuid.UUID, error) {
 	id, err := uuid.Parse(s)
 	if err != nil {
@@ -496,7 +496,7 @@ func parseUUID(s string) (uuid.UUID, error) {
 // SELECT WHERE paths where a no-match (empty result) is the correct
 // semantics on bad input. Do NOT use for writes, updates, deletes, or any
 // SELECT where an empty result would hide a bug. Prefer parseUUID for new
-// code. See docs/agent-identity-conventions.md trap zone 3.
+// code. See docs/agent-identity-conventions.md.
 func parseUUIDOrNil(s string) uuid.UUID {
 	id, err := uuid.Parse(s)
 	if err != nil {

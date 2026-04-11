@@ -23,10 +23,8 @@ var channelInstanceAllowed = map[string]bool{
 }
 
 // ChannelInstancesMethods handles channel instance CRUD via WebSocket RPC.
-//
-// NFR-2 exception (Phase 3 C2): agentStore is a new struct field required to
-// support agent_key input via resolveAgentUUIDCached. Constructor signature
-// expanded — single caller at cmd/gateway_channels_setup.go.
+// agentStore is held so the create/update handlers can resolve agent_key or
+// UUID input via resolveAgentUUIDCached.
 type ChannelInstancesMethods struct {
 	store      store.ChannelInstanceStore
 	agentStore store.AgentStore
@@ -127,9 +125,9 @@ func (m *ChannelInstancesMethods) handleCreate(ctx context.Context, client *gate
 		return
 	}
 
-	// Accept both agent_key and UUID via resolveAgentUUIDCached (Phase 3 FR-1).
-	// nil router: channel_instances methods are not wired to the router — falls
-	// back to a pure DB lookup which is acceptable given create is a rare op.
+	// Accept both agent_key and UUID via resolveAgentUUIDCached. Router is nil
+	// here because channel_instances methods are not wired to the router —
+	// falls back to a pure DB lookup, acceptable given create is a rare op.
 	agentID, err := resolveAgentUUIDCached(ctx, nil, m.agentStore, params.AgentID)
 	if err != nil {
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidID, "agent_id")))

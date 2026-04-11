@@ -59,10 +59,11 @@ func TestResolveAgentUUIDCached_CacheMissFallsBack(t *testing.T) {
 	}
 }
 
-// TestResolveAgentUUIDCached_UUIDInputTakesDBPath — per Phase 2 H1, a caller
-// passing the UUID form is never cached under the raw UUID key, so the helper
-// must fall through to the DB path. Verifies this by checking the stub's
-// sentinel error surfaces.
+// TestResolveAgentUUIDCached_UUIDInputTakesDBPath verifies that a caller
+// passing the UUID form falls through to the DB path. Router cache entries
+// are canonicalized to `tenantID:agentKey`, so the raw UUID input never hits
+// the cache and the helper must delegate to the store stub (whose sentinel
+// error surfaces here).
 func TestResolveAgentUUIDCached_UUIDInputTakesDBPath(t *testing.T) {
 	r := agent.NewRouter()
 	stub := &errorAgentStore{err: errSentinelMiss}

@@ -43,7 +43,7 @@ func registerAllMethods(server *gateway.Server, agents *agent.Router, sessStore 
 
 	// Phase 2: Heartbeat
 	heartbeatMethods := methods.NewHeartbeatMethods(heartbeatStore, msgBus)
-	// Wire cache-aware resolver (Phase 3): accepts agent_key or UUID input
+	// Wire cache-aware resolver so heartbeat can accept agent_key or UUID
 	// without a DB roundtrip on the hot path when the agent is router-cached.
 	heartbeatMethods.SetAgentRouter(agents)
 	heartbeatMethods.Register(router)

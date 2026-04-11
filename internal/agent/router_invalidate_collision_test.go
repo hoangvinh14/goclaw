@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-// TestInvalidateAgent_NoSubstringCollision — Phase 2 FR-2.
-// Before the fix, Router.Remove / InvalidateAgent used strings.HasSuffix
-// which would match "tenantX:sub-foo" when invalidating "foo". Verify
-// exact-segment match rejects substring collisions.
+// TestInvalidateAgent_NoSubstringCollision verifies exact-segment match
+// rejects substring collisions. A previous HasSuffix-based matcher would have
+// removed "tenantX:sub-foo" when invalidating "foo" — this regression guards
+// against that.
 func TestInvalidateAgent_NoSubstringCollision(t *testing.T) {
 	r := NewRouter()
 	r.agents["tenantX:foo"] = &agentEntry{}

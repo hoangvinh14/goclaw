@@ -57,9 +57,8 @@ func (s *PGVaultStore) Close() error { return nil }
 // optAgentUUID converts a nullable *string agent_id to *uuid.UUID for SQL.
 // Returns (nil, nil) when the input is nil or empty — a legitimate SQL NULL.
 // Returns (nil, error) on a non-empty, non-UUID input — propagating the error
-// prevents silent-nil writes that would otherwise corrupt data (pre-Phase-4
-// this helper silently returned nil on garbage input).
-// See docs/agent-identity-conventions.md (Phase 6).
+// prevents silent-nil writes that would otherwise corrupt data.
+// See docs/agent-identity-conventions.md.
 func optAgentUUID(agentID *string) (*uuid.UUID, error) {
 	if agentID == nil || *agentID == "" {
 		return nil, nil

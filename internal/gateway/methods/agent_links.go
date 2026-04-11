@@ -412,7 +412,7 @@ func (m *AgentLinksMethods) invalidateLinkAgentsByID(ctx context.Context, source
 // its canonical UUID via a DB lookup. Tenant-aware via
 // store.TenantIDFromContext(ctx) inside agentStore.GetByID/GetByKey. Prefer
 // resolveAgentUUIDCached in hot-path handlers to avoid the extra DB roundtrip.
-// See docs/agent-identity-conventions.md trap zone 5.
+// See docs/agent-identity-conventions.md.
 func resolveAgentUUID(ctx context.Context, agentStore store.AgentStore, keyOrID string) (uuid.UUID, error) {
 	if id, err := uuid.Parse(keyOrID); err == nil {
 		ag, err := agentStore.GetByID(ctx, id)
@@ -441,7 +441,7 @@ type agentUUIDProvider interface {
 // on cache miss or when the input is a UUID string (router cache keys are
 // canonicalized to `tenantID:agentKey`, so UUID inputs never hit the cache).
 // If router is nil, delegates straight to resolveAgentUUID.
-// See docs/agent-identity-conventions.md trap zone 5 and section 8.
+// See docs/agent-identity-conventions.md.
 func resolveAgentUUIDCached(ctx context.Context, router *agent.Router, agentStore store.AgentStore, keyOrID string) (uuid.UUID, error) {
 	// Fast path: input is agent_key and the agent is cached in the router.
 	if router != nil {

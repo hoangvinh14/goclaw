@@ -41,10 +41,11 @@ func (h *VaultHandler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	agentIDStr := r.FormValue("agent_id")
 	teamIDStr := r.FormValue("team_id")
 
-	// Boundary UUID validation — Fix B (Phase 1, H9 mitigation).
-	// validateTeamMembership short-circuits on owner role + lite edition (nil teamAccess),
-	// leaving downstream `parseUUIDOrNil(*doc.TeamID)` as a silent-nil trap. Validate at
-	// the HTTP boundary so bad form input is rejected before any store call or event publish.
+	// Boundary UUID validation. validateTeamMembership below short-circuits
+	// on owner role + lite edition (nil teamAccess), which would leave a
+	// downstream parseUUIDOrNil(*doc.TeamID) call as a silent-nil trap.
+	// Validate at the HTTP boundary so bad form input is rejected before any
+	// store call or event publish.
 	// See docs/agent-identity-conventions.md.
 	if agentIDStr != "" {
 		if _, err := uuid.Parse(agentIDStr); err != nil {

@@ -70,7 +70,7 @@ func ResolveMemoryFlushSettings(compaction *config.CompactionConfig) *MemoryFlus
 // buildMemoryFlushPromptConfig returns the SystemPromptConfig used by the
 // memory flush turn. Extracted as a pure function so tests can assert the
 // config shape (specifically, that AgentUUID is populated) without building
-// a full Loop fixture. See Phase 1 Fix A and M7 mitigation.
+// a full Loop fixture.
 func buildMemoryFlushPromptConfig(
 	agentID, agentUUID, model, workspace string,
 	toolNames []string,
@@ -131,9 +131,8 @@ func (l *Loop) runMemoryFlush(ctx context.Context, sessionKey string, settings *
 	flushSystemPrompt := strings.ReplaceAll(settings.SystemPrompt, "YYYY-MM-DD", today)
 
 	// System prompt: combine agent's normal system prompt context with flush system prompt.
-	// Config construction extracted to buildMemoryFlushPromptConfig for testability — the
-	// AgentUUID field here mirrors loop_history.go:199-201 and must stay in sync
-	// (regression: missing AgentUUID caused identity drift in DomainEvents — see PR #826).
+	// AgentUUID must stay in sync with loop_history.go's SystemPromptConfig —
+	// missing it here historically caused identity drift in downstream DomainEvents.
 	systemPrompt := BuildSystemPrompt(buildMemoryFlushPromptConfig(
 		l.id,
 		l.agentUUID.String(),

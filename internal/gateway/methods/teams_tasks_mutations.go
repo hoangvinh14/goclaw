@@ -151,7 +151,7 @@ func (m *TeamsMethods) handleTaskAssign(ctx context.Context, client *gateway.Cli
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidID, "taskId")))
 		return
 	}
-	// Phase 3 FR-1: accept agent_key or UUID for assignee.
+	// Accept agent_key or UUID for assignee.
 	agentID, err := resolveAgentUUIDCached(ctx, m.agentRouter, m.agentStore, params.AgentID)
 	if err != nil {
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidID, "agentId")))
