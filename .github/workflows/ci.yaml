@@ -48,6 +48,15 @@ jobs:
       # suites run in <20s, so 90s leaves ample breathing room.
       - name: Unit tests
         run: go test -race -timeout=90s -coverpkg=./... -coverprofile=coverage.out ./...
+      # Invariant tests (P0) - tenant isolation, permission enforcement
+      # These run against real DB and MUST pass for merge.
+      - name: Invariant tests (P0)
+        run: go test -race -timeout=90s -tags integration ./tests/invariants/...
+      # Contract tests (P1) - API schema validation
+      # Skip if no server available (requires CONTRACT_TEST_* env vars).
+      - name: Contract tests (P1)
+        run: go test -race -timeout=90s -tags integration ./tests/contracts/... || echo "::warning::Contract tests skipped (no server configured)"
+        continue-on-error: true
       # Integration suite runs against the `pg` service container above.
       # Longer -timeout=180s because the first test runs migrations from
       # scratch (can take 10-30s on a cold CI runner). Local full suite

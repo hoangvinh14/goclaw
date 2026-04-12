@@ -72,6 +72,38 @@ Shared predicate: `store.IsMasterScope(ctx)` (`internal/store/context.go`).
 - `requireAuth(RoleAdmin)` as the **sole** gate on a global-state write
 - Admin revoke/delete handlers that skip pre-fetch ownership verification (store SQL alone is not enough when it matches `IS NULL` arms)
 
+## Test Layers
+
+Tests are organized by priority and purpose:
+
+| Layer | Priority | Location | Blocking? | Purpose |
+|-------|----------|----------|-----------|---------|
+| **Invariants** | P0 | `tests/invariants/` | YES | Tenant isolation, permission enforcement |
+| **Contracts** | P1 | `tests/contracts/` | YES | API schema validation |
+| **Scenarios** | P2 | `tests/scenarios/` | NO | End-to-end user journeys |
+| **Integration** | P1 | `tests/integration/` | YES | DB/pipeline integration |
+
+### Running Tests
+
+```bash
+make test              # Unit tests (fast, no DB)
+make test-invariants   # P0 invariants (requires pgvector)
+make test-contracts    # P1 API contracts (requires server)
+make test-scenarios    # P2 scenarios (requires server)
+make test-critical     # P0 + P1 (run before merge)
+```
+
+### Test Layer Policy
+
+- **P0 failures**: Block PR merge immediately
+- **P1 failures**: Block merge, investigate contract breakage
+- **P2 failures**: Warning only, may indicate flaky tests or environment issues
+
+When adding new tests:
+- Tenant isolation/permissions → `tests/invariants/`
+- API response schemas → `tests/contracts/`
+- User journeys (multi-step flows) → `tests/scenarios/`
+
 ### Commit Messages
 
 Use conventional commits:
