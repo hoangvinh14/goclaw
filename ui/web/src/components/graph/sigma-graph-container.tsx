@@ -34,10 +34,10 @@ function useThemeColors() {
   return {
     isDark,
     labelColor: isDark ? "#e2e8f0" : "#1e293b",
-    // Base edge color — visible but not dominant
-    edgeColor: isDark ? "#47556966" : "#94a3b8cc",
+    // Base edge color — subtle, not dominant
+    edgeColor: isDark ? "#47556944" : "#94a3b8aa",
     // Dim color for non-active edges
-    dimEdgeColor: isDark ? "#47556933" : "#cbd5e166",
+    dimEdgeColor: isDark ? "#47556922" : "#cbd5e155",
     // Highlight for active neighborhood edges
     highlightEdgeColor: isDark ? "#a1a1aa" : "#64748b",
   };
