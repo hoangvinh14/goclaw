@@ -72,6 +72,9 @@ func (w *EnrichWorker) classifyLinks(ctx context.Context, provider providers.Pro
 			raw, err := w.callClassifyWithRetry(ctx, provider, model, system, user)
 			if err != nil {
 				slog.Warn("vault.classify: llm_failed", "doc", sourceDocID, "chunk", chunkStart, "err", err)
+				if w.progress != nil {
+					w.progress.AddError(fmt.Sprintf("classify failed for %s: %v", sourceDocID, err))
+				}
 				continue
 			}
 

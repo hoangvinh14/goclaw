@@ -179,6 +179,7 @@ func (d *gatewayDeps) wireHTTPHandlersOnServer(
 	if d.pgStores != nil && d.pgStores.Vault != nil {
 		vh := httpapi.NewVaultHandler(d.pgStores.Vault, d.pgStores.Teams, d.workspace, d.domainBus, d.pgStores.Agents, d.pgStores.Teams)
 		vh.SetEnrichProgress(d.enrichProgress)
+		vh.SetEnrichWorker(d.enrichWorker)
 		d.server.SetVaultHandler(vh)
 	}
 

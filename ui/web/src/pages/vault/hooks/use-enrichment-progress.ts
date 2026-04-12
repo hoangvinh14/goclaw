@@ -2,10 +2,12 @@ import { useState, useRef } from "react";
 import { useWsEvent } from "@/hooks/use-ws-event";
 
 export interface EnrichmentEvent {
-  phase: string;   // enriching, complete
+  phase: string;   // enriching, complete, error
   done: number;
   total: number;
   running: boolean;
+  error_count?: number;
+  last_error?: string;
 }
 
 /**

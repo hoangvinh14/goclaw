@@ -145,6 +145,30 @@ export function useRescanWorkspace() {
   return { rescan, isPending };
 }
 
+/** Stop the current enrichment process. */
+export function useStopEnrichment() {
+  const http = useHttp();
+  const [isPending, setIsPending] = useState(false);
+
+  const stop = useCallback(async () => {
+    setIsPending(true);
+    try {
+      const result = await http.post<{ stopped: boolean; message?: string }>(`/v1/vault/enrichment/stop`, {});
+      if (result.stopped) {
+        toast.success(i18n.t("vault:enrichStopped", "Enrichment stopped"));
+      }
+      return result;
+    } catch (err) {
+      toast.error(i18n.t("vault:enrichStopFailed", "Failed to stop enrichment"), err instanceof Error ? err.message : "");
+      throw err;
+    } finally {
+      setIsPending(false);
+    }
+  }, [http]);
+
+  return { stop, isPending };
+}
+
 /** Delete a vault link. */
 export function useDeleteLink(linkId: string) {
   const http = useHttp();

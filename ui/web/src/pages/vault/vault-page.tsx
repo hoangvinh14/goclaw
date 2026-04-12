@@ -1,15 +1,16 @@
-import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, FileArchive, Plus, PanelLeftOpen, FolderSync, Loader2 } from "lucide-react";
+import { Search, FileArchive, Plus, PanelLeftOpen, FolderSync, Loader2, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHttp } from "@/hooks/use-ws";
 import { useAgents } from "@/pages/agents/hooks/use-agents";
 import { useTeams } from "@/pages/teams/hooks/use-teams";
 import { useIsMobile } from "@/hooks/use-media-query";
-import { useRescanWorkspace } from "./hooks/use-vault";
+import { useRescanWorkspace, useStopEnrichment } from "./hooks/use-vault";
 import { useVaultTree } from "./hooks/use-vault-tree";
 import { useEnrichmentProgress } from "./hooks/use-enrichment-progress";
+import { toast } from "@/stores/use-toast-store";
 import { VaultDocumentSidebar } from "./vault-document-sidebar";
 import { VaultSearchDialog } from "./vault-search-dialog";
 import { VaultCreateDialog } from "./vault-create-dialog";
@@ -42,8 +43,22 @@ export function VaultPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const { rescan, isPending: rescanPending } = useRescanWorkspace();
+  const { stop: stopEnrich, isPending: stopPending } = useStopEnrichment();
   const enrichment = useEnrichmentProgress();
   const enriching = enrichment?.running ?? false;
+
+  // Track last error count to show toast only for new errors
+  const lastErrorCount = useRef(0);
+  useEffect(() => {
+    if (enrichment?.error_count && enrichment.error_count > lastErrorCount.current) {
+      toast.error(t("enrichError", "Enrichment error"), enrichment.last_error ?? "");
+      lastErrorCount.current = enrichment.error_count;
+    }
+    // Reset error count when enrichment completes
+    if (!enrichment?.running) {
+      lastErrorCount.current = 0;
+    }
+  }, [enrichment?.error_count, enrichment?.last_error, enrichment?.running, t]);
 
   const treeFilter = useMemo(() => ({
     agent_id: selectedAgent || undefined,
@@ -144,6 +159,18 @@ export function VaultPage() {
               <TooltipContent>{enriching ? t("enriching", "Enriching documents...") : t("rescanTooltip", "Rescan workspace")}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
+          {enriching && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" variant="outline" onClick={stopEnrich} disabled={stopPending}>
+                    {stopPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <StopCircle className="h-3.5 w-3.5 text-destructive" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("stopEnrich", "Stop enrichment")}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -167,6 +194,11 @@ export function VaultPage() {
               {enrichment.running
                 ? `${t("enriching", "Enriching")} ${enrichment.done}/${enrichment.total}`
                 : t("enrichComplete", "Enrichment complete")}
+              {(enrichment.error_count ?? 0) > 0 && (
+                <span className="text-destructive ml-1">
+                  ({enrichment.error_count} {t("errors", "errors")})
+                </span>
+              )}
             </span>
           </div>
         )}

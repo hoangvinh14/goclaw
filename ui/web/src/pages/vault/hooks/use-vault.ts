@@ -222,4 +222,5 @@ export {
   useCreateLink,
   useDeleteLink,
   useRescanWorkspace,
+  useStopEnrichment,
 } from "./use-vault-mutations";

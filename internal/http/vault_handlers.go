@@ -41,11 +41,15 @@ type VaultHandler struct {
 	workspace      string
 	eventBus       eventbus.DomainEventBus
 	enrichProgress *vault.EnrichProgress // nil = enrichment progress SSE disabled
+	enrichWorker   *vault.EnrichWorker   // nil = stop not available
 	rescanMu       sync.Map              // key: tenantID → struct{}, per-tenant concurrency guard
 }
 
 // SetEnrichProgress injects the enrichment progress tracker for SSE streaming.
 func (h *VaultHandler) SetEnrichProgress(p *vault.EnrichProgress) { h.enrichProgress = p }
+
+// SetEnrichWorker injects the enrichment worker for stop functionality.
+func (h *VaultHandler) SetEnrichWorker(w *vault.EnrichWorker) { h.enrichWorker = w }
 
 func NewVaultHandler(s store.VaultStore, ta store.TeamAccessStore, workspace string, bus eventbus.DomainEventBus, agents AgentLister, teams TeamLister) *VaultHandler {
 	return &VaultHandler{store: s, teamAccess: ta, agents: agents, teams: teams, workspace: workspace, eventBus: bus}
@@ -122,6 +126,7 @@ func (h *VaultHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/vault/tree", h.auth(h.handleVaultTree))
 	mux.HandleFunc("POST /v1/vault/search", h.auth(h.handleSearchAll))
 	mux.HandleFunc("GET /v1/vault/enrichment/status", h.auth(h.handleEnrichmentStatus))
+	mux.HandleFunc("POST /v1/vault/enrichment/stop", h.auth(h.handleEnrichmentStop))
 	// Per-agent endpoints (backward compat — same handlers, agentID from path).
 	mux.HandleFunc("GET /v1/agents/{agentID}/vault/documents", h.auth(h.handleListDocuments))
 	mux.HandleFunc("GET /v1/agents/{agentID}/vault/documents/{docID}", h.auth(h.handleGetDocument))
@@ -251,6 +256,21 @@ func (h *VaultHandler) handleEnrichmentStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, h.enrichProgress.Status())
+}
+
+// handleEnrichmentStop stops the current enrichment process for the tenant.
+func (h *VaultHandler) handleEnrichmentStop(w http.ResponseWriter, r *http.Request) {
+	if h.enrichWorker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "enrichment worker not available"})
+		return
+	}
+	tenantID := store.TenantIDFromContext(r.Context()).String()
+	if !h.enrichWorker.IsRunning(tenantID) {
+		writeJSON(w, http.StatusOK, map[string]any{"stopped": false, "message": "no enrichment running"})
+		return
+	}
+	h.enrichWorker.Stop(tenantID)
+	writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
 }
 
 var allowedDocTypes = map[string]bool{"context": true, "memory": true, "note": true, "skill": true, "episodic": true, "media": true}

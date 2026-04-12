@@ -12,12 +12,14 @@ import (
 // Lifecycle: handler calls Start(total) once with the global count,
 // worker chunks call AddDone(n) as they complete. Auto-completes when done >= total.
 type EnrichProgress struct {
-	mu       sync.Mutex
-	msgBus   bus.EventPublisher
-	tenantID uuid.UUID
-	total    int
-	done     int
-	running  bool
+	mu         sync.Mutex
+	msgBus     bus.EventPublisher
+	tenantID   uuid.UUID
+	total      int
+	done       int
+	running    bool
+	errorCount int
+	lastError  string
 }
 
 // NewEnrichProgress creates a progress tracker that broadcasts to WS clients.
@@ -27,10 +29,12 @@ func NewEnrichProgress(msgBus bus.EventPublisher) *EnrichProgress {
 
 // EnrichEvent is the WS event payload for vault enrichment progress.
 type EnrichEvent struct {
-	Phase   string `json:"phase"`   // enriching, complete
-	Done    int    `json:"done"`    // docs completed so far
-	Total   int    `json:"total"`   // total docs in pipeline
-	Running bool   `json:"running"` // false when pipeline idle
+	Phase      string `json:"phase"`                 // enriching, complete, error
+	Done       int    `json:"done"`                  // docs completed so far
+	Total      int    `json:"total"`                 // total docs in pipeline
+	Running    bool   `json:"running"`               // false when pipeline idle
+	ErrorCount int    `json:"error_count,omitempty"` // number of failed docs
+	LastError  string `json:"last_error,omitempty"`  // most recent error message
 }
 
 // Status returns current progress state (for polling fallback / HTTP endpoint).
@@ -41,7 +45,14 @@ func (p *EnrichProgress) Status() EnrichEvent {
 	if !p.running {
 		phase = "idle"
 	}
-	return EnrichEvent{Phase: phase, Done: p.done, Total: p.total, Running: p.running}
+	return EnrichEvent{
+		Phase:      phase,
+		Done:       p.done,
+		Total:      p.total,
+		Running:    p.running,
+		ErrorCount: p.errorCount,
+		LastError:  p.lastError,
+	}
 }
 
 func (p *EnrichProgress) broadcast(e EnrichEvent) {
@@ -60,7 +71,26 @@ func (p *EnrichProgress) Start(total int, tenantID uuid.UUID) {
 	p.total = total
 	p.tenantID = tenantID
 	p.running = true
+	p.errorCount = 0
+	p.lastError = ""
 	p.broadcast(EnrichEvent{Phase: "enriching", Done: 0, Total: total, Running: true})
+}
+
+// AddError increments error count and broadcasts an error event.
+// Used when enrichment fails for a document (e.g., LLM retries exhausted).
+func (p *EnrichProgress) AddError(errMsg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.errorCount++
+	p.lastError = errMsg
+	p.broadcast(EnrichEvent{
+		Phase:      "error",
+		Done:       p.done,
+		Total:      p.total,
+		Running:    p.running,
+		ErrorCount: p.errorCount,
+		LastError:  errMsg,
+	})
 }
 
 // AddDone increments completed count by n and broadcasts progress.
@@ -71,11 +101,25 @@ func (p *EnrichProgress) AddDone(n int) {
 	defer p.mu.Unlock()
 	p.done += n
 	if p.done >= p.total && p.total > 0 {
-		p.broadcast(EnrichEvent{Phase: "complete", Done: p.done, Total: p.total, Running: false})
+		p.broadcast(EnrichEvent{
+			Phase:      "complete",
+			Done:       p.done,
+			Total:      p.total,
+			Running:    false,
+			ErrorCount: p.errorCount,
+			LastError:  p.lastError,
+		})
 		p.running = false
 		return
 	}
-	p.broadcast(EnrichEvent{Phase: "enriching", Done: p.done, Total: p.total, Running: true})
+	p.broadcast(EnrichEvent{
+		Phase:      "enriching",
+		Done:       p.done,
+		Total:      p.total,
+		Running:    true,
+		ErrorCount: p.errorCount,
+		LastError:  p.lastError,
+	})
 }
 
 // Finish forces completion. Only needed if done never reaches total
@@ -86,6 +130,13 @@ func (p *EnrichProgress) Finish() {
 	if !p.running {
 		return
 	}
-	p.broadcast(EnrichEvent{Phase: "complete", Done: p.done, Total: p.total, Running: false})
+	p.broadcast(EnrichEvent{
+		Phase:      "complete",
+		Done:       p.done,
+		Total:      p.total,
+		Running:    false,
+		ErrorCount: p.errorCount,
+		LastError:  p.lastError,
+	})
 	p.running = false
 }

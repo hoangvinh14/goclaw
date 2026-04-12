@@ -389,6 +389,9 @@ func (w *EnrichWorker) batchSummarize(ctx context.Context, provider providers.Pr
 	})
 	if err != nil {
 		slog.Warn("vault.enrich: batch_summarize", "count", len(paths), "err", err)
+		if w.progress != nil {
+			w.progress.AddError(fmt.Sprintf("batch summarize failed: %v", err))
+		}
 		return nil
 	}
 	return parseBatchSummaries(raw, len(paths))
