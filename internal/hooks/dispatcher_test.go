@@ -478,3 +478,148 @@ func TestDispatcher_ScriptMutation_UISourceDenied(t *testing.T) {
 		t.Fatalf("non-builtin mutation leaked: UpdatedRawInput=%v", *r.UpdatedRawInput)
 	}
 }
+
+// ── Phase 05: dotted-path allowlist walker (exercises Phase-03 walker)  ──────
+//
+// Phase 05 ships the pii-redactor whose mutable_fields are
+// [rawInput, toolInput.command, toolInput.query, toolInput.content].
+// These tests drive the dispatcher's applyBuiltinMutation via a mutating
+// handler + a custom lookup to prove the dotted-path and wildcard semantics
+// continue to hold with that specific allowlist. No actual JS runs here.
+
+func TestDispatcher_Walker_DottedPathOnlyAllowedKeys(t *testing.T) {
+	prev := installAllowlist(t, map[string][]string{
+		"pii": {"toolInput.command"},
+	})
+	defer prev()
+
+	cfg := newBaseHook(hooks.HandlerScript, hooks.EventPreToolUse)
+	cfg.Source = hooks.SourceBuiltin
+	cfg.ID = allowlistID("pii")
+	fs := &fakeStore{hooks: []hooks.HookConfig{cfg}}
+
+	// Handler "tries" to mutate both command (allowed) AND path (not allowed).
+	// The dispatcher must apply only the allowed key; path stays at its original
+	// event value — NOT the handler's forged override.
+	h := &mutatingHandler{updated: map[string]any{
+		"toolInput": map[string]any{
+			"command": "REDACTED",
+			"path":    "EVIL_OVERRIDE",
+		},
+	}}
+	d := hooks.NewStdDispatcher(hooks.StdDispatcherOpts{
+		Store:    fs,
+		Audit:    hooks.NewAuditWriter(fs, ""),
+		Handlers: map[hooks.HandlerType]hooks.Handler{hooks.HandlerScript: h},
+	})
+
+	r, err := d.Fire(context.Background(), hooks.Event{
+		EventID:   "e",
+		HookEvent: hooks.EventPreToolUse,
+		ToolInput: map[string]any{"path": "/safe/path", "command": "old"},
+	})
+	if err != nil {
+		t.Fatalf("Fire: %v", err)
+	}
+	if r.UpdatedToolInput == nil {
+		t.Fatal("walker dropped allowed key")
+	}
+	if got, _ := r.UpdatedToolInput["command"].(string); got != "REDACTED" {
+		t.Errorf("command=%q, want REDACTED", got)
+	}
+	if got, _ := r.UpdatedToolInput["path"].(string); got != "/safe/path" {
+		t.Errorf("disallowed key slipped through: path=%q, want /safe/path", got)
+	}
+}
+
+func TestDispatcher_Walker_RawInputOnly_IgnoresToolInput(t *testing.T) {
+	prev := installAllowlist(t, map[string][]string{"raw": {"rawInput"}})
+	defer prev()
+
+	cfg := newBaseHook(hooks.HandlerScript, hooks.EventUserPromptSubmit)
+	cfg.Source = hooks.SourceBuiltin
+	cfg.ID = allowlistID("raw")
+	fs := &fakeStore{hooks: []hooks.HookConfig{cfg}}
+
+	h := &mutatingHandler{updated: map[string]any{
+		"rawInput":  "redacted",
+		"toolInput": map[string]any{"command": "should-be-stripped"},
+	}}
+	d := hooks.NewStdDispatcher(hooks.StdDispatcherOpts{
+		Store:    fs,
+		Audit:    hooks.NewAuditWriter(fs, ""),
+		Handlers: map[hooks.HandlerType]hooks.Handler{hooks.HandlerScript: h},
+	})
+
+	r, err := d.Fire(context.Background(), hooks.Event{
+		EventID:   "e",
+		HookEvent: hooks.EventUserPromptSubmit,
+		RawInput:  "original",
+		ToolInput: map[string]any{"command": "orig"},
+	})
+	if err != nil {
+		t.Fatalf("Fire: %v", err)
+	}
+	if r.UpdatedRawInput == nil || *r.UpdatedRawInput != "redacted" {
+		t.Fatalf("UpdatedRawInput=%v, want 'redacted'", r.UpdatedRawInput)
+	}
+	// UpdatedToolInput may be non-nil (dispatcher returns the evMut toolInput
+	// once any mutation happens), but each key must still equal its original
+	// event value — the handler's forged "should-be-stripped" must NOT appear.
+	if r.UpdatedToolInput != nil {
+		if got, _ := r.UpdatedToolInput["command"].(string); got != "orig" {
+			t.Errorf("toolInput.command leaked handler forge: got %q, want orig", got)
+		}
+	}
+}
+
+func TestDispatcher_Walker_ToolInputWildcard_MergesAll(t *testing.T) {
+	prev := installAllowlist(t, map[string][]string{"wild": {"toolInput"}})
+	defer prev()
+
+	cfg := newBaseHook(hooks.HandlerScript, hooks.EventPreToolUse)
+	cfg.Source = hooks.SourceBuiltin
+	cfg.ID = allowlistID("wild")
+	fs := &fakeStore{hooks: []hooks.HookConfig{cfg}}
+
+	h := &mutatingHandler{updated: map[string]any{
+		"toolInput": map[string]any{"a": 1, "b": 2, "c": 3},
+	}}
+	d := hooks.NewStdDispatcher(hooks.StdDispatcherOpts{
+		Store:    fs,
+		Audit:    hooks.NewAuditWriter(fs, ""),
+		Handlers: map[hooks.HandlerType]hooks.Handler{hooks.HandlerScript: h},
+	})
+
+	r, err := d.Fire(context.Background(), hooks.Event{
+		EventID:   "e",
+		HookEvent: hooks.EventPreToolUse,
+		ToolInput: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Fire: %v", err)
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if _, ok := r.UpdatedToolInput[k]; !ok {
+			t.Errorf("wildcard merge dropped key %q", k)
+		}
+	}
+}
+
+// installAllowlist swaps the dispatcher's per-id lookup for the duration of
+// a test. Keys in the map are resolved via allowlistID(name). Returns the
+// restore func; callers defer it.
+func installAllowlist(t *testing.T, m map[string][]string) func() {
+	t.Helper()
+	ids := map[uuid.UUID][]string{}
+	for name, fields := range m {
+		ids[allowlistID(name)] = fields
+	}
+	hooks.SetBuiltinAllowlistLookup(func(id uuid.UUID) []string { return ids[id] })
+	return func() { hooks.SetBuiltinAllowlistLookup(nil) }
+}
+
+func allowlistID(name string) uuid.UUID {
+	// Stable deterministic UUID per label so cfg.ID matches the lookup.
+	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte("test.allowlist/"+name))
+}

@@ -6,15 +6,42 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestLoad_EmptyYaml ensures the Phase 04 ship state (empty builtins list +
-// _placeholder.js) loads without error and leaves the registry empty.
-func TestLoad_EmptyYaml(t *testing.T) {
+// TestLoad_ShippedRegistry verifies the baked-in builtins parse clean at
+// build time. Phase 05 ships pii-redactor (2 events), so we assert the
+// registry contains at least that spec and that its embedded source file
+// loaded successfully.
+func TestLoad_ShippedRegistry(t *testing.T) {
 	if err := Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := RegisteredSpecs(); len(got) != 0 {
-		t.Errorf("registered=%d, want 0 (empty builtins.yaml)", len(got))
+	specs := RegisteredSpecs()
+	var pii *Spec
+	for i := range specs {
+		if specs[i].ID == "pii-redactor" {
+			pii = &specs[i]
+			break
+		}
 	}
+	if pii == nil {
+		t.Fatalf("pii-redactor not in registry; have %v", specIDs(specs))
+	}
+	if pii.SourceFile != "pii-redactor.js" {
+		t.Errorf("pii-redactor source_file=%q, want pii-redactor.js", pii.SourceFile)
+	}
+	if len(pii.Events) != 2 {
+		t.Errorf("pii-redactor events=%v, want 2", pii.Events)
+	}
+	if src, ok := source("pii-redactor.js"); !ok || len(src) == 0 {
+		t.Error("pii-redactor.js bytes not cached after Load")
+	}
+}
+
+func specIDs(ss []Spec) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s.ID)
+	}
+	return out
 }
 
 // TestBuiltinNamespace_Stable guards against a silent namespace change that

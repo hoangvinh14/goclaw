@@ -128,3 +128,11 @@ func source(file string) ([]byte, bool) {
 	b, ok := sourceCache[file]
 	return b, ok
 }
+
+// Source returns the raw bytes of an embedded builtin source file without
+// going through Load()/the in-memory cache. Primarily for handler tests that
+// want to exercise the real embedded JS in isolation. Returns the usual
+// fs.ErrNotExist when the file is missing.
+func Source(name string) ([]byte, error) {
+	return fs.ReadFile(name)
+}

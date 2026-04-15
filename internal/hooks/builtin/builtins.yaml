@@ -25,4 +25,24 @@
 # Phase 04 ships this registry empty. Phase 05 adds the first exemplar
 # (pii-redactor). When adding a builtin, also add the .js file + remove
 # the _placeholder.js once at least one real source_file exists.
-builtins: []
+builtins:
+  - id: pii-redactor
+    version: 1
+    events: [user_prompt_submit, pre_tool_use]
+    scope: global
+    matcher: ""
+    if_expr: ""
+    timeout_ms: 2000
+    # Fail-open on timeout: missing one redaction is less harmful than
+    # blocking the whole conversation. Operators who want strict behavior
+    # can toggle the row to matcher/disabled via config.
+    on_timeout: allow
+    # High priority so the redactor runs BEFORE other hooks see raw input.
+    priority: 900
+    mutable_fields:
+      - rawInput
+      - toolInput.command
+      - toolInput.query
+      - toolInput.content
+    source_file: pii-redactor.js
+    description: "Masks email addresses and E.164-ish phone numbers in user input and common tool-input fields."
