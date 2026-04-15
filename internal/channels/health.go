@@ -1,6 +1,9 @@
 package channels
 
 import (
+	"context"
+	"errors"
+	"net"
 	"strings"
 	"time"
 )
@@ -65,12 +68,12 @@ type ChannelHealth struct {
 	Detail              string              `json:"detail,omitempty"`
 	FailureKind         ChannelFailureKind  `json:"failure_kind,omitempty"`
 	Retryable           bool                `json:"retryable"`
-	CheckedAt           time.Time           `json:"checked_at,omitempty"`
+	CheckedAt           time.Time           `json:"checked_at"`
 	FailureCount        int                 `json:"failure_count,omitempty"`
 	ConsecutiveFailures int                 `json:"consecutive_failures,omitempty"`
-	FirstFailedAt       time.Time           `json:"first_failed_at,omitempty"`
-	LastFailedAt        time.Time           `json:"last_failed_at,omitempty"`
-	LastHealthyAt       time.Time           `json:"last_healthy_at,omitempty"`
+	FirstFailedAt       time.Time           `json:"first_failed_at"`
+	LastFailedAt        time.Time           `json:"last_failed_at"`
+	LastHealthyAt       time.Time           `json:"last_healthy_at"`
 	Remediation         *ChannelRemediation `json:"remediation,omitempty"`
 }
 
@@ -86,7 +89,6 @@ type ChannelErrorInfo struct {
 // This is a best-effort classification based on error message patterns from upstream libraries
 // (telego, discordgo, etc.). If upstream changes error format, the default case returns
 // "unknown + retryable", so misclassification degrades gracefully to generic guidance.
-// TODO: Use errors.As() where upstream libraries expose typed errors.
 func ClassifyChannelError(err error) ChannelErrorInfo {
 	if err == nil {
 		return ChannelErrorInfo{
@@ -97,6 +99,43 @@ func ClassifyChannelError(err error) ChannelErrorInfo {
 		}
 	}
 
+	// Prefer typed error checks over string matching where possible.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ChannelErrorInfo{
+			Summary:   "Network error",
+			Detail:    "Timed out while reaching the upstream service.",
+			Kind:      ChannelFailureKindNetwork,
+			Retryable: true,
+		}
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return ChannelErrorInfo{
+			Summary:   "Network error",
+			Detail:    "GoClaw could not resolve the upstream host.",
+			Kind:      ChannelFailureKindNetwork,
+			Retryable: !dnsErr.IsNotFound,
+		}
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return ChannelErrorInfo{
+				Summary:   "Network error",
+				Detail:    "Timed out while reaching the upstream service.",
+				Kind:      ChannelFailureKindNetwork,
+				Retryable: true,
+			}
+		}
+		return ChannelErrorInfo{
+			Summary:   "Network error",
+			Detail:    "GoClaw could not open a network connection to the upstream service.",
+			Kind:      ChannelFailureKindNetwork,
+			Retryable: true,
+		}
+	}
+
+	// Fall back to string matching for errors without typed wrappers.
 	detail := err.Error()
 	msg := strings.ToLower(detail)
 

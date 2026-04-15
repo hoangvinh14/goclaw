@@ -34,4 +34,8 @@ type Stores struct {
 	SkillTenantCfgs        SkillTenantConfigStore
 	SystemConfigs          SystemConfigStore
 	SubagentTasks          SubagentTaskStore
+	Vault                  VaultStore
+	Episodic               EpisodicStore
+	EvolutionMetrics       EvolutionMetricsStore
+	EvolutionSuggestions   EvolutionSuggestionStore
 }

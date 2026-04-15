@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
@@ -15,7 +16,10 @@ func (s *PGMemoryStore) Search(ctx context.Context, query string, agentID, userI
 		maxResults = s.cfg.MaxResults
 	}
 
-	aid := mustParseUUID(agentID)
+	aid, err := parseUUID(agentID)
+	if err != nil {
+		return nil, fmt.Errorf("memory search: %w", err)
+	}
 
 	// FTS search using tsvector
 	ftsResults, err := s.ftsSearch(ctx, query, aid, userID, maxResults*2)
@@ -56,7 +60,7 @@ func (s *PGMemoryStore) Search(ctx context.Context, query string, agentID, userI
 		if opts.MinScore > 0 && m.Score < opts.MinScore {
 			continue
 		}
-		if opts.PathPrefix != "" && len(m.Path) < len(opts.PathPrefix) {
+		if opts.PathPrefix != "" && !strings.HasPrefix(m.Path, opts.PathPrefix) {
 			continue
 		}
 		filtered = append(filtered, m)
@@ -127,17 +131,13 @@ func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID any
 		args = append(args, limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
+	var rows []scoredChunkRow
+	if err := pkgSqlxDB.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []scoredChunk
-	for rows.Next() {
-		var r scoredChunk
-		rows.Scan(&r.Path, &r.StartLine, &r.EndLine, &r.Text, &r.UserID, &r.Score)
-		results = append(results, r)
+	results := make([]scoredChunk, len(rows))
+	for i := range rows {
+		results[i] = rows[i].toScoredChunk()
 	}
 	return results, nil
 }
@@ -197,17 +197,13 @@ func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, a
 		args = append(args, vecStr, limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
+	var rows []scoredChunkRow
+	if err := pkgSqlxDB.SelectContext(ctx, &rows, q, args...); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var results []scoredChunk
-	for rows.Next() {
-		var r scoredChunk
-		rows.Scan(&r.Path, &r.StartLine, &r.EndLine, &r.Text, &r.UserID, &r.Score)
-		results = append(results, r)
+	results := make([]scoredChunk, len(rows))
+	for i := range rows {
+		results[i] = rows[i].toScoredChunk()
 	}
 	return results, nil
 }

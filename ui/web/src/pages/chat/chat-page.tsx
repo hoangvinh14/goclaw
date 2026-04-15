@@ -81,8 +81,8 @@ export function ChatPage() {
   const isOwn = !sessionKey || isOwnSession(sessionKey, userId);
 
   const handleMessageAdded = useCallback(
-    (msg: { role: "user" | "assistant" | "tool"; content: string; timestamp?: number }) => {
-      addLocalMessage(msg);
+    (msg: { role: "user" | "assistant" | "tool"; content: string; timestamp?: number }, key?: string) => {
+      addLocalMessage(msg, key);
     },
     [addLocalMessage],
   );
@@ -125,7 +125,7 @@ export function ChatPage() {
         navigate("/chat");
       }
     },
-    [navigate, sessionKey],
+    [navigate],
   );
 
   const handleSend = useCallback(
@@ -234,7 +234,16 @@ export function ChatPage() {
         )}
 
         <div className="shrink-0">
-          <ChatTopBar agentId={agentId} isRunning={isRunning} isBusy={isBusy} activity={activity} teamTasks={teamTasks} onToggleTaskPanel={() => setTaskPanelOpen((v) => !v)} taskPanelOpen={taskPanelOpen} />
+          <ChatTopBar
+            agentId={agentId}
+            isRunning={isRunning}
+            isBusy={isBusy}
+            activity={activity}
+            teamTasks={teamTasks}
+            onToggleTaskPanel={() => setTaskPanelOpen((v) => !v)}
+            taskPanelOpen={taskPanelOpen}
+            session={sessions.find((s) => s.key === sessionKey) ?? null}
+          />
         </div>
 
         {sendError && (

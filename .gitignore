@@ -55,7 +55,7 @@ deploy-*.sh
 
 docs/technical-diaries
 docs/zuey
-plans
+plans/
 release-manifest.json
 k8s-*/*
 
@@ -88,6 +88,7 @@ compose.d/*
 /mise.*.toml
 /mise
 /.mise
+goclaw-patched-linux-amd64
 
 # Local compose modules
 compose.d/*
@@ -99,6 +100,7 @@ compose.d/*
 /mise.*.toml
 /mise
 /.mise
+goclaw-patched-linux-amd64
 
 .agent/
 .agents/

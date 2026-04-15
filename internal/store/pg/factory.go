@@ -14,6 +14,8 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
+	initSqlx(db)
+
 	memCfg := DefaultPGMemoryConfig()
 
 	skillsDir := cfg.SkillsStorageDir
@@ -52,5 +54,9 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		SkillTenantCfgs:       NewPGSkillTenantConfigStore(db),
 		SystemConfigs:         NewPGSystemConfigStore(db),
 		SubagentTasks:         NewPGSubagentTaskStore(db),
+		Vault:                 NewPGVaultStore(db),
+		Episodic:              NewPGEpisodicStore(db),
+		EvolutionMetrics:      NewPGEvolutionMetricsStore(db),
+		EvolutionSuggestions:  NewPGEvolutionSuggestionStore(db),
 	}, nil
 }

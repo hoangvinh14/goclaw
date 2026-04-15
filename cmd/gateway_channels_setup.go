@@ -69,9 +69,12 @@ func registerConfigChannels(cfg *config.Config, channelMgr *channels.Manager, ms
 	}
 
 	if cfg.Channels.WhatsApp.Enabled {
-		if cfg.Channels.WhatsApp.BridgeURL == "" {
-			recordMissingConfig(channels.TypeWhatsApp, "Set channels.whatsapp.bridge_url in config.")
-		} else if wa, err := whatsapp.New(cfg.Channels.WhatsApp, msgBus, nil); err != nil {
+		waDialect := "pgx"
+		if strings.Contains(fmt.Sprintf("%T", pgStores.DB.Driver()), "sqlite") {
+			waDialect = "sqlite3"
+		}
+		wa, err := whatsapp.New(cfg.Channels.WhatsApp, msgBus, pgStores.Pairing, pgStores.DB, pgStores.PendingMessages, waDialect)
+		if err != nil {
 			channelMgr.RecordFailure(channels.TypeWhatsApp, "", err)
 			slog.Error("failed to initialize whatsapp channel", "error", err)
 		} else {
@@ -144,12 +147,18 @@ func registerConfigChannels(cfg *config.Config, channelMgr *channels.Manager, ms
 	if cfg.Channels.Feishu.Enabled {
 		if cfg.Channels.Feishu.AppID == "" {
 			recordMissingConfig(channels.TypeFeishu, "Set channels.feishu.app_id in config.")
-		} else if f, err := feishu.New(cfg.Channels.Feishu, msgBus, pgStores.Pairing, nil); err != nil {
-			channelMgr.RecordFailure(channels.TypeFeishu, "", err)
-			slog.Error("failed to initialize feishu channel", "error", err)
 		} else {
-			channelMgr.RegisterChannel(channels.TypeFeishu, f)
-			slog.Info("feishu/lark channel enabled (config)")
+			feishuOpts := []feishu.Option{
+				feishu.WithAgentStore(pgStores.Agents),
+				feishu.WithConfigPermStore(pgStores.ConfigPermissions),
+			}
+			if f, err := feishu.New(cfg.Channels.Feishu, msgBus, pgStores.Pairing, nil, feishuOpts...); err != nil {
+				channelMgr.RecordFailure(channels.TypeFeishu, "", err)
+				slog.Error("failed to initialize feishu channel", "error", err)
+			} else {
+				channelMgr.RegisterChannel(channels.TypeFeishu, f)
+				slog.Info("feishu/lark channel enabled (config)")
+			}
 		}
 	}
 }
@@ -161,9 +170,10 @@ func wireChannelRPCMethods(server *gateway.Server, pgStores *store.Stores, chann
 
 	// Register channel instances WS RPC methods
 	if pgStores.ChannelInstances != nil {
-		methods.NewChannelInstancesMethods(pgStores.ChannelInstances, msgBus, msgBus).Register(server.Router())
+		methods.NewChannelInstancesMethods(pgStores.ChannelInstances, pgStores.Agents, msgBus, msgBus).Register(server.Router())
 		zalomethods.NewQRMethods(pgStores.ChannelInstances, msgBus).Register(server.Router())
 		zalomethods.NewContactsMethods(pgStores.ChannelInstances).Register(server.Router())
+		whatsapp.NewQRMethods(pgStores.ChannelInstances, channelMgr).Register(server.Router())
 	}
 
 	// Register agent links WS RPC methods
@@ -279,3 +289,4 @@ func wireChannelEventSubscribers(
 		})
 	}
 }
+
