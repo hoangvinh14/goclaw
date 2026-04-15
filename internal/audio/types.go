@@ -72,7 +72,7 @@ const (
 	ModeAll   Mode = "all"   // All replies including tool/block
 )
 
-// ---- STT (stubs — implementations land in Phase 4) ----
+// ---- STT (Phase 4) ----
 
 // STTProvider transcribes audio bytes to text.
 type STTProvider interface {
@@ -80,23 +80,29 @@ type STTProvider interface {
 	Transcribe(ctx context.Context, in STTInput, opts STTOptions) (*TranscriptResult, error)
 }
 
-// STTInput is the audio to transcribe. At most one of Audio/FilePath is set.
+// STTInput is the audio to transcribe. Bytes or FilePath may be set; FilePath
+// preferred for large files to avoid memory pressure.
 type STTInput struct {
-	Audio    []byte // raw audio bytes (in-memory)
-	FilePath string // path on disk (used by proxy_stt)
+	Bytes    []byte // raw audio bytes (in-memory)
+	FilePath string // path on disk (preferred for >1MB files)
 	MimeType string // e.g. "audio/ogg"
+	Filename string // original filename (used for multipart form)
 }
 
 // STTOptions tunes transcription.
 type STTOptions struct {
-	Language string // BCP-47 hint, empty = auto-detect
-	Model    string // provider-specific model ID
+	Language  string // BCP-47/ISO-639-1 hint, empty = auto-detect
+	ModelID   string // provider-specific model ID (default "scribe_v1")
+	Diarize   bool   // enable speaker diarization
+	TimeoutMs int    // per-call timeout override; 0 = provider default
 }
 
 // TranscriptResult is the output of transcription.
 type TranscriptResult struct {
-	Text     string
-	Language string // detected or hinted language
+	Text     string  // transcribed text
+	Language string  // detected or hinted language
+	Duration float64 // audio duration in seconds (if returned by provider)
+	Provider string  // provider name that produced the transcript
 }
 
 // ---- Music (stubs — implementations land in Phase 3) ----
