@@ -190,7 +190,7 @@ export const configSchema: Record<string, FieldDef[]> = {
   ],
   chatops: [
     { key: "dm_policy", label: "DM Policy", type: "select", options: dmPolicyOptions, defaultValue: "pairing" },
-    { key: "group_policy", label: "Group Policy", type: "select", options: groupPolicyOptions, defaultValue: "allowlist" },
+    { key: "group_policy", label: "Group Policy", type: "select", options: groupPolicyOptions, defaultValue: "pairing" },
     { key: "require_mention", label: "Require @mention in groups", type: "boolean", defaultValue: true },
     { key: "history_limit", label: "Group History Limit", type: "number", defaultValue: 50, help: "Max pending group messages for context (0 = disabled)" },
     { key: "allow_from", label: "Allowed Users", type: "tags", help: "Mattermost user IDs" },

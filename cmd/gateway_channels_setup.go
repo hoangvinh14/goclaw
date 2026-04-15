@@ -124,17 +124,7 @@ func registerConfigChannels(cfg *config.Config, channelMgr *channels.Manager, ms
 		}
 	}
 
-	if cfg.Channels.ChatOps.Enabled && cfg.Channels.ChatOps.ServerURL != "" && instanceLoader == nil {
-		co, err := chatopschannel.New(cfg.Channels.ChatOps, msgBus, pgStores.Pairing, nil)
-		if err != nil {
-			slog.Error("failed to initialize chatops channel", "error", err)
-		} else {
-			channelMgr.RegisterChannel(channels.TypeChatOps, co)
-			slog.Info("chatops channel enabled (config)")
-		}
-	}
-
-	if cfg.Channels.ChatOps.Enabled && cfg.Channels.ChatOps.ServerURL != "" && instanceLoader == nil {
+	if cfg.Channels.ChatOps.Enabled && cfg.Channels.ChatOps.ServerURL != "" {
 		co, err := chatopschannel.New(cfg.Channels.ChatOps, msgBus, pgStores.Pairing, nil)
 		if err != nil {
 			slog.Error("failed to initialize chatops channel", "error", err)

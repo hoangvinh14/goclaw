@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -72,6 +73,7 @@ type cachedMembers struct {
 var _ channels.Channel = (*Channel)(nil)
 var _ channels.BlockReplyChannel = (*Channel)(nil)
 var _ channels.PendingCompactable = (*Channel)(nil)
+var _ interface{ SetPendingHistoryTenantID(uuid.UUID) } = (*Channel)(nil)
 
 // New creates a new ChatOps channel from config.
 func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, pendingStore store.PendingMessageStore) (*Channel, error) {
@@ -101,7 +103,7 @@ func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 	}
 	groupPolicy := cfg.GroupPolicy
 	if groupPolicy == "" {
-		groupPolicy = "allowlist"
+		groupPolicy = "pairing"
 	}
 
 	return &Channel{
@@ -125,6 +127,13 @@ func (c *Channel) BlockReplyEnabled() *bool { return c.blockReply }
 // SetPendingCompaction configures LLM-based auto-compaction for pending messages.
 func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
 	c.groupHistory.SetCompactionConfig(cfg)
+}
+
+// SetPendingHistoryTenantID propagates tenant_id to the pending history for DB operations.
+func (c *Channel) SetPendingHistoryTenantID(id uuid.UUID) {
+	if c.groupHistory != nil {
+		c.groupHistory.SetTenantID(id)
+	}
 }
 
 // Start authenticates and connects the WebSocket listener.

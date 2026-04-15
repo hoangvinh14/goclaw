@@ -77,12 +77,7 @@ func (c *Channel) handlePosted(ctx context.Context, event map[string]any) {
 
 	// Policy check
 	if isDM {
-		if !c.checkDMPolicy(ctx,userID, channelID) {
-			return
-		}
-		if !c.IsAllowed(compoundSenderID) {
-			slog.Debug("chatops message rejected by allowlist",
-				"user_id", userID, "display_name", displayName)
+		if !c.checkDMPolicy(ctx, userID, channelID) {
 			return
 		}
 	} else {
