@@ -287,6 +287,31 @@ function FieldRenderer({
         </div>
       );
 
+    case "id-tags": {
+      // Free-text tags for IDs (channel IDs, etc.) — one per line, stored as string[]
+      const arr = (value as string[]) ?? [];
+      const text = arr.join("\n");
+      return (
+        <div className="grid gap-1.5">
+          <Label htmlFor={id}>{label}</Label>
+          <Textarea
+            id={id}
+            value={text}
+            onChange={(e) => {
+              const lines = e.target.value
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean);
+              onChange(lines.length > 0 ? lines : undefined);
+            }}
+            placeholder={field.placeholder ?? "One ID per line"}
+            rows={3}
+          />
+          {help && <p className="text-xs text-muted-foreground">{help}</p>}
+        </div>
+      );
+    }
+
     default:
       return null;
   }
