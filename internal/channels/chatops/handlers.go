@@ -294,6 +294,12 @@ func (c *Channel) checkDMPolicy(ctx context.Context, senderID, channelID string)
 }
 
 func (c *Channel) checkGroupPolicy(ctx context.Context, senderID, channelID string) bool {
+	// Denylist takes precedence over all policies.
+	if c.blockedGroups[channelID] {
+		slog.Debug("chatops group blocked by blocked_groups", "channel_id", channelID)
+		return false
+	}
+
 	switch c.groupPolicy {
 	case "disabled":
 		return false

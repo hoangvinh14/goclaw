@@ -21,6 +21,7 @@ type chatopsInstanceConfig struct {
 	DMPolicy       string   `json:"dm_policy,omitempty"`
 	GroupPolicy    string   `json:"group_policy,omitempty"`
 	AllowFrom      []string `json:"allow_from,omitempty"`
+	BlockedGroups  []string `json:"blocked_groups,omitempty"`
 	RequireMention *bool    `json:"require_mention,omitempty"`
 	HistoryLimit   int      `json:"history_limit,omitempty"`
 	BlockReply     *bool    `json:"block_reply,omitempty"`
@@ -55,6 +56,7 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		ServerURL:      c.ServerURL,
 		Token:          c.Token,
 		AllowFrom:      ic.AllowFrom,
+		BlockedGroups:  ic.BlockedGroups,
 		DMPolicy:       ic.DMPolicy,
 		GroupPolicy:    ic.GroupPolicy,
 		RequireMention: ic.RequireMention,
@@ -105,6 +107,7 @@ func FactoryWithPendingStore(pendingStore store.PendingMessageStore) channels.Ch
 			ServerURL:      c.ServerURL,
 			Token:          c.Token,
 			AllowFrom:      ic.AllowFrom,
+			BlockedGroups:  ic.BlockedGroups,
 			DMPolicy:       ic.DMPolicy,
 			GroupPolicy:    ic.GroupPolicy,
 			RequireMention: ic.RequireMention,

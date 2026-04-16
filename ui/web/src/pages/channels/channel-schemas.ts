@@ -194,6 +194,7 @@ export const configSchema: Record<string, FieldDef[]> = {
     { key: "require_mention", label: "Require @mention in groups", type: "boolean", defaultValue: true },
     { key: "history_limit", label: "Group History Limit", type: "number", defaultValue: 50, help: "Max pending group messages for context (0 = disabled)" },
     { key: "allow_from", label: "Allowed Users", type: "tags", help: "Mattermost user IDs" },
+    { key: "blocked_groups", label: "Blocked Groups", type: "tags", help: "Mattermost channel IDs to silently block (one per line)" },
     { key: "block_reply", label: "Block Reply", type: "select", options: blockReplyOptions, defaultValue: "inherit", help: "Deliver intermediate text during tool iterations" },
   ],
 };

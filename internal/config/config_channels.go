@@ -29,8 +29,9 @@ type ChatOpsConfig struct {
 	ServerURL      string              `json:"server_url"`                    // Mattermost-compatible server URL
 	Token          string              `json:"token"`                         // MMAUTHTOKEN from browser cookies
 	AllowFrom      FlexibleStringSlice `json:"allow_from"`
+	BlockedGroups  FlexibleStringSlice `json:"blocked_groups,omitempty"`      // Mattermost channel IDs to silently block
 	DMPolicy       string              `json:"dm_policy,omitempty"`           // "pairing" (default), "allowlist", "open", "disabled"
-	GroupPolicy    string              `json:"group_policy,omitempty"`        // "allowlist" (default), "open", "pairing", "disabled"
+	GroupPolicy    string              `json:"group_policy,omitempty"`        // "pairing" (default), "open", "allowlist", "disabled"
 	RequireMention *bool               `json:"require_mention,omitempty"`     // require @bot mention in groups (default true)
 	HistoryLimit   int                 `json:"history_limit,omitempty"`       // max pending group messages for context (default 50, 0=disabled)
 	BlockReply     *bool               `json:"block_reply,omitempty"`         // override gateway block_reply (nil = inherit)

@@ -53,6 +53,7 @@ type Channel struct {
 	historyLimit   int
 	dmPolicy       string
 	groupPolicy    string
+	blockedGroups  map[string]bool
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 }
@@ -107,6 +108,11 @@ func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		groupPolicy = "pairing"
 	}
 
+	blocked := make(map[string]bool, len(cfg.BlockedGroups))
+	for _, id := range cfg.BlockedGroups {
+		blocked[id] = true
+	}
+
 	return &Channel{
 		BaseChannel:    base,
 		serverURL:      strings.TrimRight(cfg.ServerURL, "/"),
@@ -119,6 +125,7 @@ func New(cfg config.ChatOpsConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		historyLimit:   historyLimit,
 		dmPolicy:       dmPolicy,
 		groupPolicy:    groupPolicy,
+		blockedGroups:  blocked,
 	}, nil
 }
 
