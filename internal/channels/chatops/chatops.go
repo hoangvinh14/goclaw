@@ -63,9 +63,9 @@ type cachedUser struct {
 	fetchedAt   time.Time
 }
 
-// cachedMembers stores resolved channel member list for group @mention injection.
-type cachedMembers struct {
-	list      string // formatted: "Alice (@alice), Bob (@bob)"
+// cachedMemberList stores resolved channel members for on-demand @mention resolution.
+type cachedMemberList struct {
+	members   []channels.GroupMember
 	fetchedAt time.Time
 }
 
@@ -73,6 +73,7 @@ type cachedMembers struct {
 var _ channels.Channel = (*Channel)(nil)
 var _ channels.BlockReplyChannel = (*Channel)(nil)
 var _ channels.PendingCompactable = (*Channel)(nil)
+var _ channels.GroupMemberProvider = (*Channel)(nil)
 var _ interface{ SetPendingHistoryTenantID(uuid.UUID) } = (*Channel)(nil)
 
 // New creates a new ChatOps channel from config.

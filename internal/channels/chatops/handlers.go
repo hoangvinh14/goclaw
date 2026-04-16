@@ -157,13 +157,7 @@ func (c *Channel) handlePosted(ctx context.Context, event map[string]any) {
 	// Build final content with group history context
 	finalContent := content
 	if peerKind == "group" {
-		// Inject channel member list so the LLM can @mention the right users
-		memberList := c.resolveChannelMembers(channelID)
-		memberTag := ""
-		if memberList != "" {
-			memberTag = fmt.Sprintf("[Group members: %s]\n", memberList)
-		}
-		annotated := fmt.Sprintf("%s[From: %s]\n%s", memberTag, displayName, content)
+		annotated := fmt.Sprintf("[From: %s]\n%s", displayName, content)
 		if c.historyLimit > 0 {
 			finalContent = c.groupHistory.BuildContext(localKey, annotated, c.historyLimit)
 		} else {
@@ -229,25 +223,23 @@ func (c *Channel) resolveUser(userID string) (displayName, username string) {
 	return name, mmUsername
 }
 
-// resolveChannelMembers fetches and caches the channel member list (display name + @handle).
-// Uses /api/v4/users?in_channel={id} which returns user objects directly.
-// Capped at 50 members; excludes the bot itself. Cached for 1 hour.
-func (c *Channel) resolveChannelMembers(channelID string) string {
-	if v, ok := c.memberCache.Load(channelID); ok {
-		cm := v.(cachedMembers)
+// ListGroupMembers returns members of a Mattermost channel for on-demand @mention resolution.
+// Uses /api/v4/users?in_channel={id}. Capped at 50 members; excludes the bot. Cached for 1 hour.
+func (c *Channel) ListGroupMembers(_ context.Context, chatID string) ([]channels.GroupMember, error) {
+	if v, ok := c.memberCache.Load(chatID); ok {
+		cm := v.(cachedMemberList)
 		if time.Since(cm.fetchedAt) < userCacheTTL {
-			return cm.list
+			return cm.members, nil
 		}
 	}
 
-	path := fmt.Sprintf("/api/v4/users?in_channel=%s&page=0&per_page=50&sort=status", channelID)
+	path := fmt.Sprintf("/api/v4/users?in_channel=%s&page=0&per_page=50&sort=status", chatID)
 	users, err := c.apiGetArray(path)
 	if err != nil {
-		slog.Debug("chatops: failed to fetch channel members", "channel_id", channelID, "error", err)
-		return ""
+		return nil, fmt.Errorf("fetch channel members: %w", err)
 	}
 
-	var parts []string
+	var members []channels.GroupMember
 	for _, u := range users {
 		uid, _ := u["id"].(string)
 		if uid == c.botUserID {
@@ -261,14 +253,14 @@ func (c *Channel) resolveChannelMembers(channelID string) string {
 		if name == "" {
 			name = username
 		}
-		if username != "" {
-			parts = append(parts, fmt.Sprintf("%s (@%s)", name, username))
-		}
+		members = append(members, channels.GroupMember{
+			MemberID: username,
+			Name:     name,
+		})
 	}
 
-	list := strings.Join(parts, ", ")
-	c.memberCache.Store(channelID, cachedMembers{list: list, fetchedAt: time.Now()})
-	return list
+	c.memberCache.Store(chatID, cachedMemberList{members: members, fetchedAt: time.Now()})
+	return members, nil
 }
 
 // --- Policy checks (same pattern as Slack) ---
