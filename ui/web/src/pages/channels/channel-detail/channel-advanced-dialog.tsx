@@ -75,11 +75,15 @@ export function ChannelAdvancedDialog({
     setSaving(true);
     try {
       const existingConfig = (instance.config ?? {}) as Record<string, unknown>;
-      const cleanAdvanced = Object.fromEntries(
-        Object.entries(values).filter(([, v]) => v !== undefined && v !== "" && v !== null),
-      );
       // Merge: preserve essential keys and groups from existing, overwrite advanced keys
-      const merged = { ...existingConfig, ...cleanAdvanced };
+      const merged = { ...existingConfig };
+      for (const [k, v] of Object.entries(values)) {
+        if (v === undefined || v === "" || v === null) {
+          delete merged[k];
+        } else {
+          merged[k] = v;
+        }
+      }
       await onUpdate({ config: merged });
       onOpenChange(false);
     } catch { // toast shown by hook
